@@ -10,24 +10,85 @@
       <h1>Terra Dice</h1>
 
       <div id="setup">
-        <label>Ширина поля <input id="inW" type="number" value="12" min="4" max="40" /></label>
-        <label>Высота поля <input id="inH" type="number" value="12" min="4" max="40" /></label>
-        <label>Игроков
-          <select id="inP">
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-          </select>
-        </label>
-        <button id="btnStart">Начать игру</button>
+        <fieldset>
+          <legend>Поле</legend>
+          <label>Ширина <input id="inW" type="number" value="12" min="4" max="40" /></label>
+          <label>Высота <input id="inH" type="number" value="12" min="4" max="40" /></label>
+          <label>Игроков
+            <select id="inP">
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Режимы</legend>
+          <label class="row"><input id="inWalls" type="checkbox" /> Стены</label>
+          <label>Плотность стен
+            <select id="inDensity">
+              <option value="0.08">мало</option>
+              <option value="0.15" selected>средне</option>
+              <option value="0.25">много</option>
+            </select>
+          </label>
+          <label class="row"><input id="inCards" type="checkbox" /> Карточки усилений</label>
+          <label>Таймер хода
+            <select id="inTimer">
+              <option value="0" selected>выключен</option>
+              <option value="15">15 сек</option>
+              <option value="30">30 сек</option>
+              <option value="60">60 сек</option>
+            </select>
+          </label>
+          <label class="row"><input id="inBot" type="checkbox" /> Бот за 2-го игрока (локально)</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Вы</legend>
+          <label>Ник <input id="inNick" type="text" maxlength="16" placeholder="Игрок 1" /></label>
+          <div class="colors" id="myColors"></div>
+        </fieldset>
+
+        <fieldset class="actions">
+          <button id="btnStart">Играть на одном экране</button>
+          <button id="btnHost">Создать онлайн-комнату</button>
+        </fieldset>
       </div>
+
+      <div id="join" hidden>
+        <p>Вас пригласили в игру! Представьтесь:</p>
+        <label>Ник <input id="joinNick" type="text" maxlength="16" placeholder="Игрок" /></label>
+        <div class="colors" id="joinColors"></div>
+        <button id="btnJoin">Подключиться</button>
+      </div>
+
+      <div id="lobby" hidden>
+        <p>Отправьте эту ссылку друзьям:</p>
+        <input id="linkField" readonly style="width: 100%; max-width: 520px" />
+        <button id="btnCopy">Копировать</button>
+        <p id="lobbyStatus"></p>
+      </div>
+
+      <div id="info" hidden></div>
 
       <div id="game" hidden>
         <div id="status"></div>
+        <div id="diceRow">
+          <span class="die" id="die1" hidden></span>
+          <span class="die" id="die2" hidden></span>
+          <span id="timer"></span>
+        </div>
+        <div id="offer" hidden></div>
+        <div id="choice" hidden></div>
+        <div id="targets" hidden></div>
+        <div id="hand"></div>
         <div id="controls">
           <button id="btnRoll">Бросить кубики</button>
           <button id="btnRotate">Повернуть (R)</button>
           <button id="btnNew">Новая игра</button>
+          <button id="btnMute" title="Звук">🔊</button>
         </div>
         <div id="message"></div>
         <canvas id="board"></canvas>
