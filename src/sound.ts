@@ -29,6 +29,47 @@ function beep(freq: number, dur: number, type: OscillatorType = 'sine', delay = 
   }
 }
 
+export function knock(strength = 1): void {
+  if (muted) return;
+  try {
+    ctx ??= new AudioContext();
+    const t0 = ctx.currentTime;
+    const vol = Math.min(1, Math.max(0, strength));
+
+    // шумовой щелчок — удар пластика
+    const dur = 0.06;
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / data.length) ** 2;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 1100 + vol * 700 + Math.random() * 500;
+    f.Q.value = 1.1;
+    const g = ctx.createGain();
+    g.gain.value = Math.min(0.22, 0.025 + vol * 0.06);
+    src.connect(f).connect(g).connect(ctx.destination);
+    src.start(t0);
+
+    // низкий глухой стук о стол
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(170 + vol * 40, t0);
+    o.frequency.exponentialRampToValueAtTime(65, t0 + 0.08);
+    const g2 = ctx.createGain();
+    g2.gain.setValueAtTime(Math.min(0.16, 0.02 + vol * 0.05), t0);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+    o.connect(g2).connect(ctx.destination);
+    o.start(t0);
+    o.stop(t0 + 0.1);
+  } catch {
+    // звук недоступен — не мешаем игре
+  }
+}
+
 export const sounds = {
   roll(): void {
     beep(500, 0.07, 'square');

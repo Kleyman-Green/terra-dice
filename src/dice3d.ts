@@ -6,8 +6,10 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { knock } from './sound';
 
 type Frame = { p: [number, number, number]; q: [number, number, number, number] };
+type Impact = { t: number; v: number }; // удар: время и сила
 
 type LiveDie = {
   mesh: THREE.Mesh;
@@ -36,6 +38,8 @@ let camera: THREE.PerspectiveCamera | null = null;
 let world: CANNON.World | null = null;
 let walls: CANNON.Body[] = [];
 let dice: LiveDie[] = [];
+let impacts: Impact[] = [];
+let impactIdx = 0;
 let playStart = 0;
 let raf = 0;
 let bounds = { minX: -4, maxX: 4, minZ: -3, maxZ: 3 };
@@ -43,8 +47,20 @@ let bounds = { minX: -4, maxX: 4, minZ: -3, maxZ: 3 };
 // ---------- текстуры граней ----------
 const texCache = new Map<string, THREE.CanvasTexture>();
 
-function faceTexture(content: number | string): THREE.CanvasTexture {
-  const key = String(content);
+// детерминированный ГПСЧ, чтобы у каждой грани был свой мраморный узор
+function mulberry(seed: number): () => number {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// чёрно-красный мрамор с переливами + вдавленная золотая цифра
+function faceTexture(value: number): THREE.CanvasTexture {
+  const key = String(value);
   const cached = texCache.get(key);
   if (cached) return cached;
 
@@ -52,112 +68,89 @@ function faceTexture(content: number | string): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
   cv.width = cv.height = S;
   const c = cv.getContext('2d')!;
+  const rand = mulberry(value * 7919 + 13);
 
-  // перламутрово-синяя грань с объёмом: яркий центр, глубокие края
-  const g = c.createLinearGradient(0, 0, S, S);
-  g.addColorStop(0, '#ffffff');
-  g.addColorStop(0.35, '#dde5ff');
-  g.addColorStop(0.75, '#93a5ef');
-  g.addColorStop(1, '#5e74c9');
-  c.fillStyle = g;
-  c.beginPath();
-  c.roundRect(0, 0, S, S, 30);
-  c.fill();
+  // тёмная основа — почти чёрная с фиолетовинкой
+  const base = c.createLinearGradient(0, 0, S, S);
+  base.addColorStop(0, '#1c1420');
+  base.addColorStop(0.5, '#120c16');
+  base.addColorStop(1, '#1a0f14');
+  c.fillStyle = base;
+  c.fillRect(0, 0, S, S);
 
-  // внутренняя тень по краю — грань выглядит выпуклой
-  const edge = c.createRadialGradient(S / 2, S / 2, S * 0.28, S / 2, S / 2, S * 0.75);
-  edge.addColorStop(0, 'rgba(255,255,255,0)');
-  edge.addColorStop(1, 'rgba(40,55,130,0.38)');
+  // красные мраморные прожилки: толстые полупрозрачные мазки
+  for (let i = 0; i < 7; i++) {
+    const x0 = rand() * S;
+    const y0 = rand() * S;
+    c.strokeStyle = `rgba(${150 + rand() * 90}, ${18 + rand() * 30}, ${40 + rand() * 35}, ${0.1 + rand() * 0.16})`;
+    c.lineWidth = 8 + rand() * 26;
+    c.lineCap = 'round';
+    c.shadowColor = 'rgba(200, 30, 60, 0.35)';
+    c.shadowBlur = 14;
+    c.beginPath();
+    c.moveTo(x0, y0);
+    c.bezierCurveTo(
+      x0 + (rand() - 0.5) * S * 1.2,
+      y0 + (rand() - 0.5) * S * 1.2,
+      rand() * S,
+      rand() * S,
+      rand() * S,
+      rand() * S,
+    );
+    c.stroke();
+  }
+  // пара ярких тонких жилок
+  c.shadowBlur = 6;
+  for (let i = 0; i < 3; i++) {
+    c.strokeStyle = `rgba(255, ${70 + rand() * 60}, ${90 + rand() * 60}, ${0.25 + rand() * 0.2})`;
+    c.lineWidth = 1.5 + rand() * 2.5;
+    c.beginPath();
+    c.moveTo(rand() * S, rand() * S);
+    c.bezierCurveTo(rand() * S, rand() * S, rand() * S, rand() * S, rand() * S, rand() * S);
+    c.stroke();
+  }
+  c.shadowBlur = 0;
+
+  // объём грани: затемнение по краям, блик сверху
+  const edge = c.createRadialGradient(S / 2, S / 2, S * 0.25, S / 2, S / 2, S * 0.75);
+  edge.addColorStop(0, 'rgba(0,0,0,0)');
+  edge.addColorStop(1, 'rgba(0,0,0,0.5)');
   c.fillStyle = edge;
-  c.beginPath();
-  c.roundRect(0, 0, S, S, 30);
-  c.fill();
+  c.fillRect(0, 0, S, S);
+  const sheen = c.createLinearGradient(0, 0, S * 0.6, S * 0.6);
+  sheen.addColorStop(0, 'rgba(255, 190, 200, 0.14)');
+  sheen.addColorStop(0.4, 'rgba(255,255,255,0)');
+  c.fillStyle = sheen;
+  c.fillRect(0, 0, S, S);
 
-  // блик сверху слева
-  const gl = c.createLinearGradient(0, 0, S * 0.7, S * 0.7);
-  gl.addColorStop(0, 'rgba(255,255,255,0.5)');
-  gl.addColorStop(0.4, 'rgba(255,255,255,0)');
-  c.fillStyle = gl;
+  // тонкий золотой ободок грани
+  c.strokeStyle = 'rgba(212, 175, 55, 0.4)';
+  c.lineWidth = 4;
   c.beginPath();
-  c.roundRect(6, 6, S - 12, S - 12, 26);
-  c.fill();
-
-  c.strokeStyle = 'rgba(50, 65, 150, 0.5)';
-  c.lineWidth = 5;
-  c.beginPath();
-  c.roundRect(3, 3, S - 6, S - 6, 28);
+  c.roundRect(5, 5, S - 10, S - 10, 24);
   c.stroke();
 
-  if (typeof content === 'string') {
-    // удвоенный кубик (7..12): крупная оранжевая цифра
-    c.fillStyle = '#ff7d1a';
-    c.font = '800 130px Nunito, system-ui, sans-serif';
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.shadowColor = 'rgba(120, 40, 0, 0.4)';
-    c.shadowBlur = 8;
-    c.fillText(content, S / 2, S / 2 + 6);
-  } else {
-    const PIPS: Record<number, [number, number][]> = {
-      1: [[0.5, 0.5]],
-      2: [
-        [0.28, 0.28],
-        [0.72, 0.72],
-      ],
-      3: [
-        [0.28, 0.28],
-        [0.5, 0.5],
-        [0.72, 0.72],
-      ],
-      4: [
-        [0.28, 0.28],
-        [0.72, 0.28],
-        [0.28, 0.72],
-        [0.72, 0.72],
-      ],
-      5: [
-        [0.28, 0.28],
-        [0.72, 0.28],
-        [0.5, 0.5],
-        [0.28, 0.72],
-        [0.72, 0.72],
-      ],
-      6: [
-        [0.28, 0.28],
-        [0.72, 0.28],
-        [0.28, 0.5],
-        [0.72, 0.5],
-        [0.28, 0.72],
-        [0.72, 0.72],
-      ],
-    };
-    for (const [px, py] of PIPS[content]) {
-      const x = px * S;
-      const y = py * S;
-      const r = S * 0.088;
-      // лунка: тёмный ободок снизу-справа, светлый сверху-слева
-      c.fillStyle = 'rgba(60, 70, 140, 0.55)';
-      c.beginPath();
-      c.arc(x + 2.5, y + 3, r * 1.12, 0, Math.PI * 2);
-      c.fill();
-      c.fillStyle = 'rgba(255, 255, 255, 0.65)';
-      c.beginPath();
-      c.arc(x - 2, y - 2.5, r * 1.1, 0, Math.PI * 2);
-      c.fill();
-      // сама точка — светящийся оранжевый
-      const pg = c.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r);
-      pg.addColorStop(0, '#ffc46b');
-      pg.addColorStop(0.6, '#ff8a1e');
-      pg.addColorStop(1, '#e05e00');
-      c.shadowColor = 'rgba(255, 122, 20, 0.55)';
-      c.shadowBlur = 10;
-      c.fillStyle = pg;
-      c.beginPath();
-      c.arc(x, y, r, 0, Math.PI * 2);
-      c.fill();
-      c.shadowBlur = 0;
-    }
-  }
+  // вдавленная золотая цифра
+  const label = String(value);
+  c.font = `900 ${label.length > 1 ? 110 : 150}px Georgia, 'Times New Roman', serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  const cx = S / 2;
+  const cy = S / 2 + 8;
+  // тень углубления (смещена вниз-вправо)
+  c.fillStyle = 'rgba(0, 0, 0, 0.9)';
+  c.fillText(label, cx + 3, cy + 4);
+  // светлый край углубления (смещён вверх-влево)
+  c.fillStyle = 'rgba(255, 226, 150, 0.75)';
+  c.fillText(label, cx - 2, cy - 2.5);
+  // золотое тело цифры с вертикальным переливом
+  const gold = c.createLinearGradient(0, cy - 70, 0, cy + 70);
+  gold.addColorStop(0, '#8a6a1f');
+  gold.addColorStop(0.42, '#f6d97b');
+  gold.addColorStop(0.58, '#d4af37');
+  gold.addColorStop(1, '#7c5f18');
+  c.fillStyle = gold;
+  c.fillText(label, cx, cy);
 
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -290,7 +283,7 @@ function updateBounds(): void {
 
 function makeMesh(value: number): THREE.Mesh {
   // порядок материалов BoxGeometry: +x, -x, +y, -y, +z, -z
-  const front: number | string = value > 6 ? String(value) : 1;
+  const front = value > 6 ? value : 1; // на front-грани цифра 7..12
   const mats = [
     faceTexture(3),
     faceTexture(4),
@@ -302,11 +295,11 @@ function makeMesh(value: number): THREE.Mesh {
     (map) =>
       new THREE.MeshPhysicalMaterial({
         map,
-        roughness: 0.24,
-        metalness: 0.05,
-        clearcoat: 1,
-        clearcoatRoughness: 0.16,
-        envMapIntensity: 0.9,
+        roughness: 0.3,
+        metalness: 0.3,
+        clearcoat: 0.7,
+        clearcoatRoughness: 0.28,
+        envMapIntensity: 1.1,
       }),
   );
   const mesh = new THREE.Mesh(new RoundedBoxGeometry(DIE, DIE, DIE, 5, 0.12), mats);
@@ -373,13 +366,25 @@ function facesMatch(bodies: CANNON.Body[], values: [number, number]): boolean {
 }
 
 // прогоняем невидимую симуляцию, пока бросок сам не ляжет как надо,
-// и возвращаем записанные траектории
-function simulate(values: [number, number]): Frame[][] | null {
+// и возвращаем записанные траектории вместе с моментами ударов
+function simulate(values: [number, number]): { tracks: Frame[][]; impacts: Impact[] } | null {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const bodies = values.map((_, i) => makeBody(i % 2 === 0));
     for (const b of bodies) world!.addBody(b);
 
     const tracks: Frame[][] = bodies.map(() => []);
+    const impacts: Impact[] = [];
+    let lastImpactAt = -1;
+    const onCollide = (e: { contact: CANNON.ContactEquation }): void => {
+      const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
+      const t = tracks[0].length * SIM_DT;
+      if (v > 1.2 && t - lastImpactAt > 0.07) {
+        impacts.push({ t, v });
+        lastImpactAt = t;
+      }
+    };
+    world!.addEventListener('collide', onCollide);
+
     let stillFrames = 0;
     let settled = false;
 
@@ -401,9 +406,10 @@ function simulate(values: [number, number]): Frame[][] | null {
       }
     }
 
+    world!.removeEventListener('collide', onCollide);
     const ok = settled && facesMatch(bodies, values);
     for (const b of bodies) world!.removeBody(b);
-    if (ok) return tracks;
+    if (ok) return { tracks, impacts };
   }
   return null;
 }
@@ -412,7 +418,8 @@ function loop(): void {
   raf = requestAnimationFrame(loop);
 
   if (dice.length) {
-    const f = (performance.now() - playStart) / 1000 / SIM_DT;
+    const pt = (performance.now() - playStart) / 1000;
+    const f = pt / SIM_DT;
     for (const die of dice) {
       const last = die.frames.length - 1;
       const i = Math.min(Math.floor(f), last);
@@ -428,6 +435,11 @@ function loop(): void {
         .set(a.q[0], a.q[1], a.q[2], a.q[3])
         .slerp(new THREE.Quaternion(b.q[0], b.q[1], b.q[2], b.q[3]), k);
     }
+    // звуки ударов точно в моменты столкновений
+    while (impactIdx < impacts.length && impacts[impactIdx].t <= pt) {
+      knock(impacts[impactIdx].v / 6);
+      impactIdx++;
+    }
   }
 
   renderer?.render(scene!, camera!);
@@ -438,8 +450,11 @@ export function throwDice(values: [number, number]): void {
   clearDice(true);
   updateBounds();
 
-  const tracks = simulate(values);
-  if (!tracks) return; // почти невозможно, но пусть тогда просто не будет анимации
+  const sim = simulate(values);
+  if (!sim) return; // почти невозможно, но пусть тогда просто не будет анимации
+  const { tracks } = sim;
+  impacts = sim.impacts;
+  impactIdx = 0;
 
   // привязываем текстуры к траекториям: финальная верхняя грань трека
   // должна совпадать со значением на кубике (порядок значений не важен)

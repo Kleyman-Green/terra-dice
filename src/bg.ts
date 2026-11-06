@@ -195,25 +195,27 @@ export function startLava(): void {
       }
     }
 
-    // двойной порог: кромка насыщенная, серединка светлее и полупрозрачная
+    // плавный профиль: прозрачность → насыщенная кромка → светлая
+    // полупрозрачная серединка, всё непрерывно, без видимых границ
     const img = lctx.getImageData(0, 0, low.width, low.height);
     const data = img.data;
+    const A0 = THRESHOLD - 26; // ниже — полностью прозрачно
+    const A1 = THRESHOLD + 14; // кромка полностью насыщена
+    const smooth = (t: number): number => t * t * (3 - 2 * t);
     for (let i = 0; i < data.length; i += 4) {
       const a = data[i + 3];
-      if (a <= THRESHOLD - 22) {
+      if (a <= A0) {
         data[i + 3] = 0;
-      } else if (a < THRESHOLD + 22) {
-        // сглаженная кромка
-        data[i + 3] = ((a - (THRESHOLD - 22)) / 44) * 255;
-      } else if (a < CORE) {
-        // насыщенный ободок
-        data[i + 3] = 255;
+      } else if (a < A1) {
+        data[i + 3] = smooth((a - A0) / (A1 - A0)) * 255;
       } else {
-        // серединка: осветляем и делаем полупрозрачной
-        data[i] = Math.min(255, data[i] + (255 - data[i]) * 0.38);
-        data[i + 1] = Math.min(255, data[i + 1] + (255 - data[i + 1]) * 0.38);
-        data[i + 2] = Math.min(255, data[i + 2] + (255 - data[i + 2]) * 0.38);
-        data[i + 3] = 150;
+        // от насыщенной кромки к светлой полупрозрачной серединке
+        const t = smooth(Math.min(1, (a - A1) / (CORE - A1)));
+        const light = t * 0.38;
+        data[i] = Math.min(255, data[i] + (255 - data[i]) * light);
+        data[i + 1] = Math.min(255, data[i + 1] + (255 - data[i + 1]) * light);
+        data[i + 2] = Math.min(255, data[i + 2] + (255 - data[i + 2]) * light);
+        data[i + 3] = 255 - t * (255 - 150);
       }
     }
     lctx.putImageData(img, 0, 0);
