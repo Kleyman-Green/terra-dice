@@ -1,27 +1,23 @@
 // Физические 3D-кубики: Three.js (рендер) + cannon-es (физика).
-// Кубики вылетают с боков, перекатываются, сталкиваются и останавливаются,
-// после остановки верхняя грань докручивается к выпавшему значению.
+// Бросок просчитывается заранее невидимо, сколько угодно раз, пока кубики
+// сами не лягут на нужные грани — затем найденное катание проигрывается
+// покадрово. Никакой видимой докрутки: как упали, так и лежат.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
-type Die = {
-  mesh: THREE.Mesh;
-  body: CANNON.Body;
-  target: number; // значение, которое должно оказаться сверху
-  corrected: boolean;
-};
+type Frame = { p: [number, number, number]; q: [number, number, number, number] };
 
-type Correction = {
-  die: Die;
-  from: THREE.Quaternion;
-  to: THREE.Quaternion;
-  start: number;
+type LiveDie = {
+  mesh: THREE.Mesh;
+  frames: Frame[]; // записанная траектория
 };
 
 const DIE = 1.15; // размер кубика в мировых единицах
-const UP = new THREE.Vector3(0, 1, 0);
+const SIM_DT = 1 / 60;
+const MAX_SIM_FRAMES = 5 * 60; // не дольше 5 секунд симуляции
+const MAX_ATTEMPTS = 400;
 
 // локальная ось грани -> её значение
 const AXES: [THREE.Vector3, number][] = [
@@ -39,10 +35,9 @@ let scene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
 let world: CANNON.World | null = null;
 let walls: CANNON.Body[] = [];
-let dice: Die[] = [];
-let corrections: Correction[] = [];
+let dice: LiveDie[] = [];
+let playStart = 0;
 let raf = 0;
-let thrownAt = 0;
 let bounds = { minX: -4, maxX: 4, minZ: -3, maxZ: 3 };
 
 // ---------- текстуры граней ----------
@@ -293,7 +288,7 @@ function updateBounds(): void {
   }
 }
 
-function makeDie(value: number): Die {
+function makeMesh(value: number): THREE.Mesh {
   // порядок материалов BoxGeometry: +x, -x, +y, -y, +z, -z
   const front: number | string = value > 6 ? String(value) : 1;
   const mats = [
@@ -316,102 +311,124 @@ function makeDie(value: number): Die {
   );
   const mesh = new THREE.Mesh(new RoundedBoxGeometry(DIE, DIE, DIE, 5, 0.12), mats);
   mesh.castShadow = true;
-  scene!.add(mesh);
+  return mesh;
+}
 
+function makeBody(fromLeft: boolean): CANNON.Body {
   const body = new CANNON.Body({
     mass: 1,
     shape: new CANNON.Box(new CANNON.Vec3(DIE / 2, DIE / 2, DIE / 2)),
     angularDamping: 0.12,
     linearDamping: 0.06,
   });
-  world!.addBody(body);
-  return { mesh, body, target: value, corrected: false };
-}
-
-function targetAxis(v: number): THREE.Vector3 {
-  if (v > 6) return new THREE.Vector3(0, 0, 1); // цифра на front-грани
-  // клонируем — applyQuaternion мутирует вектор
-  return AXES.find(([, val]) => val === v)![0].clone();
-}
-
-// докрутка верхней грани к выпавшему значению
-function correctDie(die: Die, now: number): void {
-  const q = new THREE.Quaternion(
-    die.body.quaternion.x,
-    die.body.quaternion.y,
-    die.body.quaternion.z,
-    die.body.quaternion.w,
+  const midZ = (bounds.minZ + bounds.maxZ) / 2;
+  const spanZ = bounds.maxZ - bounds.minZ;
+  body.position.set(
+    fromLeft ? bounds.minX + DIE * 0.8 : bounds.maxX - DIE * 0.8,
+    1.1 + Math.random() * 0.7,
+    midZ + (Math.random() - 0.5) * spanZ * 0.5,
   );
-  const d = targetAxis(die.target).applyQuaternion(q);
-  const corr = new THREE.Quaternion().setFromUnitVectors(d.normalize(), UP);
-  const to = corr.multiply(q);
-  corrections.push({ die, from: q.clone(), to, start: now });
-  die.corrected = true;
+  body.quaternion.setFromEuler(
+    Math.random() * Math.PI * 2,
+    Math.random() * Math.PI * 2,
+    Math.random() * Math.PI * 2,
+  );
+  const speed = 6 + Math.random() * 2.5;
+  body.velocity.set(
+    fromLeft ? speed : -speed,
+    0.4 + Math.random() * 1.0,
+    (Math.random() - 0.5) * 3,
+  );
+  body.angularVelocity.set(
+    (Math.random() - 0.5) * 30,
+    (Math.random() - 0.5) * 30,
+    (Math.random() - 0.5) * 30,
+  );
+  return body;
+}
+
+// значение верхней грани по кватерниону покоя
+function topValue(q: CANNON.Quaternion): number {
+  const tq = new THREE.Quaternion(q.x, q.y, q.z, q.w);
+  let best = 0;
+  let by = -2;
+  const d = new THREE.Vector3();
+  for (const [axis, val] of AXES) {
+    d.copy(axis).applyQuaternion(tq);
+    if (d.y > by) {
+      by = d.y;
+      best = val;
+    }
+  }
+  return best;
+}
+
+// легла ли пара кубиков на нужные грани.
+// Порядок не важен: фишка a×b — прямоугольник, ему всё равно,
+// какой кубик показал длину, а какой ширину.
+function facesMatch(bodies: CANNON.Body[], values: [number, number]): boolean {
+  const need = values.map((v) => (v > 6 ? 1 : v)).sort(); // цифра 7..12 живёт на front-грани
+  const got = bodies.map((b) => topValue(b.quaternion)).sort();
+  return need[0] === got[0] && need[1] === got[1];
+}
+
+// прогоняем невидимую симуляцию, пока бросок сам не ляжет как надо,
+// и возвращаем записанные траектории
+function simulate(values: [number, number]): Frame[][] | null {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const bodies = values.map((_, i) => makeBody(i % 2 === 0));
+    for (const b of bodies) world!.addBody(b);
+
+    const tracks: Frame[][] = bodies.map(() => []);
+    let stillFrames = 0;
+    let settled = false;
+
+    for (let f = 0; f < MAX_SIM_FRAMES; f++) {
+      world!.step(SIM_DT);
+      bodies.forEach((b, i) => {
+        tracks[i].push({
+          p: [b.position.x, b.position.y, b.position.z],
+          q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w],
+        });
+      });
+      const still = bodies.every(
+        (b) => b.velocity.length() < 0.12 && b.angularVelocity.length() < 0.12,
+      );
+      stillFrames = still ? stillFrames + 1 : 0;
+      if (stillFrames > 18) {
+        settled = true;
+        break;
+      }
+    }
+
+    const ok = settled && facesMatch(bodies, values);
+    for (const b of bodies) world!.removeBody(b);
+    if (ok) return tracks;
+  }
+  return null;
 }
 
 function loop(): void {
   raf = requestAnimationFrame(loop);
-  const now = performance.now();
 
-  if (world) world.fixedStep();
-  for (const die of dice) {
-    // страховка: если кубик каким-то образом улетел за поле — возвращаем в центр
-    const p = die.body.position;
-    if (
-      p.y < -2 ||
-      p.x < bounds.minX - 3 ||
-      p.x > bounds.maxX + 3 ||
-      p.z < bounds.minZ - 3 ||
-      p.z > bounds.maxZ + 3
-    ) {
-      p.set(
-        (bounds.minX + bounds.maxX) / 2 + (Math.random() - 0.5) * 2,
-        2,
-        (bounds.minZ + bounds.maxZ) / 2 + (Math.random() - 0.5) * 2,
+  if (dice.length) {
+    const f = (performance.now() - playStart) / 1000 / SIM_DT;
+    for (const die of dice) {
+      const last = die.frames.length - 1;
+      const i = Math.min(Math.floor(f), last);
+      const k = i >= last ? 0 : Math.min(1, f - i);
+      const a = die.frames[i];
+      const b = die.frames[Math.min(i + 1, last)];
+      die.mesh.position.set(
+        a.p[0] + (b.p[0] - a.p[0]) * k,
+        a.p[1] + (b.p[1] - a.p[1]) * k,
+        a.p[2] + (b.p[2] - a.p[2]) * k,
       );
-      die.body.velocity.set((Math.random() - 0.5) * 2, 0, (Math.random() - 0.5) * 2);
-    }
-    if (!die.corrected) {
-      die.mesh.position.copy(die.body.position as unknown as THREE.Vector3);
-      die.mesh.quaternion.copy(die.body.quaternion as unknown as THREE.Quaternion);
+      die.mesh.quaternion
+        .set(a.q[0], a.q[1], a.q[2], a.q[3])
+        .slerp(new THREE.Quaternion(b.q[0], b.q[1], b.q[2], b.q[3]), k);
     }
   }
-
-  // ждём, пока кубики почти докатились, и мягко доворачиваем грань —
-  // доворот происходит, пока кубик ещё движется, поэтому глаз его не ловит
-  if (dice.length && !corrections.length && dice.some((d) => !d.corrected)) {
-    const slow = dice.every(
-      (d) => d.body.velocity.length() < 1.5 && d.body.angularVelocity.length() < 2.4,
-    );
-    const overtime = now - thrownAt > 5200; // страховка от бесконечного катания
-    if (slow || overtime) {
-      if (overtime) {
-        dice.forEach((d) => {
-          d.body.velocity.setZero();
-          d.body.angularVelocity.setZero();
-        });
-      }
-      dice.forEach((d) => {
-        if (!d.corrected) correctDie(d, now);
-      });
-    }
-  }
-
-  // анимация доворота: позиция продолжает следовать за физикой
-  // (кубик докатывается), меняется только ориентация — без подскоков
-  corrections = corrections.filter((cr) => {
-    const t = Math.min(1, (now - cr.start) / 420);
-    const k = t * t * (3 - 2 * t); // smoothstep
-    cr.die.mesh.position.copy(cr.die.body.position as unknown as THREE.Vector3);
-    cr.die.mesh.quaternion.slerpQuaternions(cr.from, cr.to, k);
-    cr.die.body.angularVelocity.setZero(); // физика не дёргает кубик во время доворота
-    if (t >= 1) {
-      cr.die.body.quaternion.copy(cr.to as unknown as CANNON.Quaternion);
-      cr.die.mesh.position.copy(cr.die.body.position as unknown as THREE.Vector3);
-      return false;
-    }
-    return true;
-  });
 
   renderer?.render(scene!, camera!);
 }
@@ -421,39 +438,29 @@ export function throwDice(values: [number, number]): void {
   clearDice(true);
   updateBounds();
 
-  dice = values.map((v, i) => {
-    const die = makeDie(v);
-    const fromLeft = i % 2 === 0;
-    const midZ = (bounds.minZ + bounds.maxZ) / 2;
-    const spanZ = bounds.maxZ - bounds.minZ;
+  const tracks = simulate(values);
+  if (!tracks) return; // почти невозможно, но пусть тогда просто не будет анимации
 
-    // вылетают из-за бортиков внутрь поля, навстречу друг другу
-    die.body.position.set(
-      fromLeft ? bounds.minX + DIE * 0.8 : bounds.maxX - DIE * 0.8,
-      1.1 + Math.random() * 0.7,
-      midZ + (Math.random() - 0.5) * spanZ * 0.5,
-    );
-    die.body.quaternion.setFromEuler(
-      Math.random() * Math.PI * 2,
-      Math.random() * Math.PI * 2,
-      Math.random() * Math.PI * 2,
-    );
-    const speed = 6 + Math.random() * 2.5;
-    die.body.velocity.set(
-      fromLeft ? speed : -speed,
-      0.4 + Math.random() * 1.0,
-      (Math.random() - 0.5) * 3,
-    );
-    die.body.angularVelocity.set(
-      (Math.random() - 0.5) * 30,
-      (Math.random() - 0.5) * 30,
-      (Math.random() - 0.5) * 30,
-    );
-    return die;
+  // привязываем текстуры к траекториям: финальная верхняя грань трека
+  // должна совпадать со значением на кубике (порядок значений не важен)
+  const tops = tracks.map((t) => {
+    const q = t[t.length - 1].q;
+    return topValue(new CANNON.Quaternion(q[0], q[1], q[2], q[3]));
+  });
+  const free = [0, 1];
+  dice = values.map((v) => {
+    const need = v > 6 ? 1 : v;
+    const ti = free.find((i) => tops[i] === need)!;
+    free.splice(free.indexOf(ti), 1);
+    const mesh = makeMesh(v);
+    const first = tracks[ti][0];
+    mesh.position.set(...first.p);
+    mesh.quaternion.set(...first.q);
+    scene!.add(mesh);
+    return { mesh, frames: tracks[ti] };
   });
 
-  corrections = [];
-  thrownAt = performance.now();
+  playStart = performance.now();
   if (!raf) loop();
 }
 
@@ -461,11 +468,9 @@ export function clearDice(instant = false): void {
   for (const die of dice) {
     if (instant) {
       scene?.remove(die.mesh);
-      world?.removeBody(die.body);
     } else {
       // быстрое растворение
       const mesh = die.mesh;
-      const body = die.body;
       const start = performance.now();
       const fade = (): void => {
         const t = (performance.now() - start) / 300;
@@ -474,12 +479,10 @@ export function clearDice(instant = false): void {
           requestAnimationFrame(fade);
         } else {
           scene?.remove(mesh);
-          world?.removeBody(body);
         }
       };
       fade();
     }
   }
   dice = [];
-  corrections = [];
 }
