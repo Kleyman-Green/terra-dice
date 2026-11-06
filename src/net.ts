@@ -40,6 +40,22 @@ const RTC_CONFIG: RTCConfiguration = {
   ],
 };
 
+// свои сигнальные релеи вместо дефолтного списка trystero:
+// отобраны живые публичные nostr-релеи, чтобы в консоль не сыпались
+// ошибки мёртвых серверов; warnOnRelayFailure глушит остаточный шум
+const RELAY_CONFIG = {
+  urls: [
+    'wss://relay.damus.io',
+    'wss://nos.lol',
+    'wss://relay.nostr.band',
+    'wss://nostr.wine',
+    'wss://relay.snort.social',
+    'wss://offchain.pub',
+    'wss://nostr.mom',
+  ],
+  warnOnRelayFailure: false,
+};
+
 export function makeCode(): string {
   let s = '';
   for (let i = 0; i < 5; i++) s += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
@@ -65,9 +81,13 @@ export interface HostLink {
 }
 
 export function createHost(code: string, players: number, h: HostHandlers): HostLink {
-  const room = joinRoom({ appId: APP_ID, rtcConfig: RTC_CONFIG }, roomId(code), {
-    onJoinError: (e) => h.onError(e.error),
-  });
+  const room = joinRoom(
+    { appId: APP_ID, rtcConfig: RTC_CONFIG, relayConfig: RELAY_CONFIG },
+    roomId(code),
+    {
+      onJoinError: (e) => h.onError(e.error),
+    },
+  );
   // Два «канала» сообщений: хозяин -> гости и гости -> хозяин
   const hostAction = room.makeAction<HostMsg>('h2c');
   const clientAction = room.makeAction<ClientMsg>('c2h');
@@ -137,9 +157,13 @@ export interface GuestLink {
 }
 
 export function createGuest(code: string, h: GuestHandlers): GuestLink {
-  const room = joinRoom({ appId: APP_ID, rtcConfig: RTC_CONFIG }, roomId(code), {
-    onJoinError: (e) => h.onError(e.error),
-  });
+  const room = joinRoom(
+    { appId: APP_ID, rtcConfig: RTC_CONFIG, relayConfig: RELAY_CONFIG },
+    roomId(code),
+    {
+      onJoinError: (e) => h.onError(e.error),
+    },
+  );
   const hostAction = room.makeAction<HostMsg>('h2c');
   const clientAction = room.makeAction<ClientMsg>('c2h');
 
