@@ -17,6 +17,29 @@ const APP_ID = 'terra-dice';
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const WELCOME_TIMEOUT_MS = 20000;
 
+// STUN для прямого соединения + публичный TURN (Open Relay / Metered)
+// на случай симметричного NAT и заблокированного UDP
+const RTC_CONFIG: RTCConfiguration = {
+  iceServers: [
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
+};
+
 export function makeCode(): string {
   let s = '';
   for (let i = 0; i < 5; i++) s += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
@@ -42,7 +65,7 @@ export interface HostLink {
 }
 
 export function createHost(code: string, players: number, h: HostHandlers): HostLink {
-  const room = joinRoom({ appId: APP_ID }, roomId(code), {
+  const room = joinRoom({ appId: APP_ID, rtcConfig: RTC_CONFIG }, roomId(code), {
     onJoinError: (e) => h.onError(e.error),
   });
   // Два «канала» сообщений: хозяин -> гости и гости -> хозяин
@@ -114,7 +137,7 @@ export interface GuestLink {
 }
 
 export function createGuest(code: string, h: GuestHandlers): GuestLink {
-  const room = joinRoom({ appId: APP_ID }, roomId(code), {
+  const room = joinRoom({ appId: APP_ID, rtcConfig: RTC_CONFIG }, roomId(code), {
     onJoinError: (e) => h.onError(e.error),
   });
   const hostAction = room.makeAction<HostMsg>('h2c');

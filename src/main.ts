@@ -607,9 +607,21 @@ function startHosting(): void {
       });
     },
     onError: (err) => {
-      $('lobbyStatus').textContent = `Ошибка сети: ${err}`;
+      $('lobbyStatus').textContent = netErrorText(err);
     },
   });
+}
+
+// понятный текст сетевых ошибок
+function netErrorText(err: string): string {
+  if (err === 'peer-unavailable') return 'Комната не найдена — проверьте ссылку';
+  if (/could not connect to peer/i.test(err)) {
+    return 'Не удалось установить соединение — попробуйте ещё раз; если не помогло, отключите VPN или смените сеть';
+  }
+  if (/relay|tracker|join/i.test(err)) {
+    return 'Серверы подключения недоступны — попробуйте позже';
+  }
+  return `Ошибка сети: ${err}`;
 }
 
 // реванш: новая партия в той же комнате, игроки и ники сохраняются
@@ -660,8 +672,7 @@ function connectGuest(): void {
       scheduleReconnect();
     },
     onError: (err) => {
-      $('info').textContent =
-        err === 'peer-unavailable' ? 'Комната не найдена — проверьте ссылку' : `Ошибка сети: ${err}`;
+      $('info').textContent = netErrorText(err);
     },
   });
 }
