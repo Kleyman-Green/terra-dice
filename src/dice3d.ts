@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 type Die = {
   mesh: THREE.Mesh;
@@ -16,7 +17,6 @@ type Correction = {
   die: Die;
   from: THREE.Quaternion;
   to: THREE.Quaternion;
-  y0: number;
   start: number;
 };
 
@@ -42,7 +42,6 @@ let walls: CANNON.Body[] = [];
 let dice: Die[] = [];
 let corrections: Correction[] = [];
 let raf = 0;
-let stillSince = 0;
 let thrownAt = 0;
 let bounds = { minX: -4, maxX: 4, minZ: -3, maxZ: 3 };
 
@@ -59,17 +58,39 @@ function faceTexture(content: number | string): THREE.CanvasTexture {
   cv.width = cv.height = S;
   const c = cv.getContext('2d')!;
 
-  // перламутрово-синяя грань
+  // перламутрово-синяя грань с объёмом: яркий центр, глубокие края
   const g = c.createLinearGradient(0, 0, S, S);
-  g.addColorStop(0, '#f4f7ff');
-  g.addColorStop(0.55, '#b9c6f7');
-  g.addColorStop(1, '#7e93e8');
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.35, '#dde5ff');
+  g.addColorStop(0.75, '#93a5ef');
+  g.addColorStop(1, '#5e74c9');
   c.fillStyle = g;
   c.beginPath();
-  c.roundRect(0, 0, S, S, 26);
+  c.roundRect(0, 0, S, S, 30);
   c.fill();
-  c.strokeStyle = 'rgba(70, 90, 180, 0.55)';
-  c.lineWidth = 6;
+
+  // внутренняя тень по краю — грань выглядит выпуклой
+  const edge = c.createRadialGradient(S / 2, S / 2, S * 0.28, S / 2, S / 2, S * 0.75);
+  edge.addColorStop(0, 'rgba(255,255,255,0)');
+  edge.addColorStop(1, 'rgba(40,55,130,0.38)');
+  c.fillStyle = edge;
+  c.beginPath();
+  c.roundRect(0, 0, S, S, 30);
+  c.fill();
+
+  // блик сверху слева
+  const gl = c.createLinearGradient(0, 0, S * 0.7, S * 0.7);
+  gl.addColorStop(0, 'rgba(255,255,255,0.5)');
+  gl.addColorStop(0.4, 'rgba(255,255,255,0)');
+  c.fillStyle = gl;
+  c.beginPath();
+  c.roundRect(6, 6, S - 12, S - 12, 26);
+  c.fill();
+
+  c.strokeStyle = 'rgba(50, 65, 150, 0.5)';
+  c.lineWidth = 5;
+  c.beginPath();
+  c.roundRect(3, 3, S - 6, S - 6, 28);
   c.stroke();
 
   if (typeof content === 'string') {
@@ -78,8 +99,8 @@ function faceTexture(content: number | string): THREE.CanvasTexture {
     c.font = '800 130px Nunito, system-ui, sans-serif';
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    c.shadowColor = 'rgba(120, 40, 0, 0.35)';
-    c.shadowBlur = 6;
+    c.shadowColor = 'rgba(120, 40, 0, 0.4)';
+    c.shadowBlur = 8;
     c.fillText(content, S / 2, S / 2 + 6);
   } else {
     const PIPS: Record<number, [number, number][]> = {
@@ -118,21 +139,34 @@ function faceTexture(content: number | string): THREE.CanvasTexture {
     for (const [px, py] of PIPS[content]) {
       const x = px * S;
       const y = py * S;
-      const r = S * 0.085;
+      const r = S * 0.088;
+      // лунка: тёмный ободок снизу-справа, светлый сверху-слева
+      c.fillStyle = 'rgba(60, 70, 140, 0.55)';
+      c.beginPath();
+      c.arc(x + 2.5, y + 3, r * 1.12, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = 'rgba(255, 255, 255, 0.65)';
+      c.beginPath();
+      c.arc(x - 2, y - 2.5, r * 1.1, 0, Math.PI * 2);
+      c.fill();
+      // сама точка — светящийся оранжевый
       const pg = c.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r);
-      pg.addColorStop(0, '#ffb35c');
-      pg.addColorStop(1, '#ff7d1a');
-      c.shadowColor = 'rgba(120, 40, 0, 0.45)';
-      c.shadowBlur = 5;
+      pg.addColorStop(0, '#ffc46b');
+      pg.addColorStop(0.6, '#ff8a1e');
+      pg.addColorStop(1, '#e05e00');
+      c.shadowColor = 'rgba(255, 122, 20, 0.55)';
+      c.shadowBlur = 10;
       c.fillStyle = pg;
       c.beginPath();
       c.arc(x, y, r, 0, Math.PI * 2);
       c.fill();
+      c.shadowBlur = 0;
     }
   }
 
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
   texCache.set(key, tex);
   return tex;
 }
@@ -156,7 +190,7 @@ function init(): void {
   camera.position.set(0, 15, 10);
   camera.lookAt(0, 0, 0.8);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
   const sun = new THREE.DirectionalLight(0xffffff, 1.6);
   sun.position.set(6, 14, 5);
   sun.castShadow = true;
@@ -166,6 +200,10 @@ function init(): void {
   sun.shadow.camera.top = 12;
   sun.shadow.camera.bottom = -12;
   scene.add(sun);
+
+  // окружение для красивых отражений на глянце кубиков
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
   world = new CANNON.World({ gravity: new CANNON.Vec3(0, -32, 0) });
   world.defaultContactMaterial.restitution = 0.35;
@@ -267,9 +305,16 @@ function makeDie(value: number): Die {
     faceTexture(6),
   ].map(
     (map) =>
-      new THREE.MeshStandardMaterial({ map, roughness: 0.35, metalness: 0.05 }),
+      new THREE.MeshPhysicalMaterial({
+        map,
+        roughness: 0.24,
+        metalness: 0.05,
+        clearcoat: 1,
+        clearcoatRoughness: 0.16,
+        envMapIntensity: 0.9,
+      }),
   );
-  const mesh = new THREE.Mesh(new RoundedBoxGeometry(DIE, DIE, DIE, 4, 0.09), mats);
+  const mesh = new THREE.Mesh(new RoundedBoxGeometry(DIE, DIE, DIE, 5, 0.12), mats);
   mesh.castShadow = true;
   scene!.add(mesh);
 
@@ -300,7 +345,7 @@ function correctDie(die: Die, now: number): void {
   const d = targetAxis(die.target).applyQuaternion(q);
   const corr = new THREE.Quaternion().setFromUnitVectors(d.normalize(), UP);
   const to = corr.multiply(q);
-  corrections.push({ die, from: q.clone(), to, y0: die.body.position.y, start: now });
+  corrections.push({ die, from: q.clone(), to, start: now });
   die.corrected = true;
 }
 
@@ -332,34 +377,37 @@ function loop(): void {
     }
   }
 
-  // ждём остановки, затем докручиваем
+  // ждём, пока кубики почти докатились, и мягко доворачиваем грань —
+  // доворот происходит, пока кубик ещё движется, поэтому глаз его не ловит
   if (dice.length && !corrections.length && dice.some((d) => !d.corrected)) {
-    const still = dice.every(
-      (d) => d.body.velocity.length() < 0.12 && d.body.angularVelocity.length() < 0.12,
+    const slow = dice.every(
+      (d) => d.body.velocity.length() < 1.5 && d.body.angularVelocity.length() < 2.4,
     );
-    if (still) {
-      if (!stillSince) stillSince = now;
-      if (now - stillSince > 350) dice.forEach((d) => correctDie(d, now));
-    } else {
-      stillSince = 0;
-      // страховка от бесконечного катания
-      if (now - thrownAt > 5000) {
+    const overtime = now - thrownAt > 5200; // страховка от бесконечного катания
+    if (slow || overtime) {
+      if (overtime) {
         dice.forEach((d) => {
           d.body.velocity.setZero();
           d.body.angularVelocity.setZero();
         });
       }
+      dice.forEach((d) => {
+        if (!d.corrected) correctDie(d, now);
+      });
     }
   }
 
-  // анимация докрутки
+  // анимация доворота: позиция продолжает следовать за физикой
+  // (кубик докатывается), меняется только ориентация — без подскоков
   corrections = corrections.filter((cr) => {
-    const t = Math.min(1, (now - cr.start) / 350);
+    const t = Math.min(1, (now - cr.start) / 420);
     const k = t * t * (3 - 2 * t); // smoothstep
+    cr.die.mesh.position.copy(cr.die.body.position as unknown as THREE.Vector3);
     cr.die.mesh.quaternion.slerpQuaternions(cr.from, cr.to, k);
-    cr.die.mesh.position.y = cr.y0 + Math.sin(t * Math.PI) * 0.22; // лёгкий подскок
+    cr.die.body.angularVelocity.setZero(); // физика не дёргает кубик во время доворота
     if (t >= 1) {
       cr.die.body.quaternion.copy(cr.to as unknown as CANNON.Quaternion);
+      cr.die.mesh.position.copy(cr.die.body.position as unknown as THREE.Vector3);
       return false;
     }
     return true;
@@ -404,7 +452,6 @@ export function throwDice(values: [number, number]): void {
     return die;
   });
 
-  stillSince = 0;
   corrections = [];
   thrownAt = performance.now();
   if (!raf) loop();
