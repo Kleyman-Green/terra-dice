@@ -616,7 +616,7 @@ function startHosting(): void {
 function netErrorText(err: string): string {
   if (err === 'peer-unavailable') return 'Комната не найдена — проверьте ссылку';
   if (/could not connect to peer/i.test(err)) {
-    return 'Не удалось установить соединение — попробуйте ещё раз; если не помогло, отключите VPN или смените сеть';
+    return 'Не удалось установить соединение — у кого-то из игроков строгий NAT (часто это мобильный интернет). Попробуйте ещё раз, попросите друга перейти на домашний Wi-Fi или настройте свой TURN-сервер в меню (пункт «Друг не может подключиться?»)';
   }
   if (/relay|tracker|join/i.test(err)) {
     return 'Серверы подключения недоступны — попробуйте позже';
@@ -917,5 +917,24 @@ if (room) {
   $('setup').hidden = true;
   $('join').hidden = false;
 }
+
+// свой TURN-сервер (необязательно) — хранится локально
+try {
+  $<HTMLInputElement>('turnUrl').value = localStorage.getItem('td.turnUrl') ?? '';
+  $<HTMLInputElement>('turnUser').value = localStorage.getItem('td.turnUser') ?? '';
+  $<HTMLInputElement>('turnPass').value = localStorage.getItem('td.turnPass') ?? '';
+} catch {
+  // localStorage недоступен
+}
+$('btnTurnSave').addEventListener('click', () => {
+  try {
+    localStorage.setItem('td.turnUrl', $<HTMLInputElement>('turnUrl').value);
+    localStorage.setItem('td.turnUser', $<HTMLInputElement>('turnUser').value);
+    localStorage.setItem('td.turnPass', $<HTMLInputElement>('turnPass').value);
+    $('turnStatus').textContent = 'Сохранено — применится к новым комнатам';
+  } catch {
+    $('turnStatus').textContent = 'Не удалось сохранить (localStorage недоступен)';
+  }
+});
 
 startLava();

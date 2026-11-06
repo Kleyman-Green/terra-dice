@@ -18,9 +18,12 @@ const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const WELCOME_TIMEOUT_MS = 20000;
 
 // STUN для прямого соединения + публичный TURN (Open Relay / Metered)
-// на случай симметричного NAT и заблокированного UDP
-const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [
+// на случай симметричного NAT и заблокированного UDP.
+// Если в настройках введён свой TURN (например, бесплатный аккаунт
+// metered.ca) — добавляем и его: relay-кандидата хозяина достаточно,
+// чтобы гость с любым NAT мог подключиться.
+export function getRtcConfig(): RTCConfiguration {
+  const iceServers: RTCIceServer[] = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] },
     {
       urls: 'turn:openrelay.metered.ca:80',
@@ -37,8 +40,17 @@ const RTC_CONFIG: RTCConfiguration = {
       username: 'openrelayproject',
       credential: 'openrelayproject',
     },
-  ],
-};
+  ];
+  try {
+    const url = localStorage.getItem('td.turnUrl')?.trim();
+    const username = localStorage.getItem('td.turnUser')?.trim();
+    const credential = localStorage.getItem('td.turnPass') ?? '';
+    if (url) iceServers.push({ urls: url, username, credential });
+  } catch {
+    // localStorage недоступен — играем без своего TURN
+  }
+  return { iceServers };
+}
 
 // Сигнальные релеи: оставляем дефолтный список trystero — он собран
 // из релеев, которые принимают служебные эфемерные события (популярные
@@ -76,7 +88,7 @@ export interface HostLink {
 
 export function createHost(code: string, players: number, h: HostHandlers): HostLink {
   const room = joinRoom(
-    { appId: APP_ID, rtcConfig: RTC_CONFIG, relayConfig: RELAY_CONFIG },
+    { appId: APP_ID, rtcConfig: getRtcConfig(), relayConfig: RELAY_CONFIG },
     roomId(code),
     {
       onJoinError: (e) => h.onError(e.error),
@@ -152,7 +164,7 @@ export interface GuestLink {
 
 export function createGuest(code: string, h: GuestHandlers): GuestLink {
   const room = joinRoom(
-    { appId: APP_ID, rtcConfig: RTC_CONFIG, relayConfig: RELAY_CONFIG },
+    { appId: APP_ID, rtcConfig: getRtcConfig(), relayConfig: RELAY_CONFIG },
     roomId(code),
     {
       onJoinError: (e) => h.onError(e.error),
