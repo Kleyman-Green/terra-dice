@@ -17,29 +17,24 @@ const APP_ID = 'terra-dice';
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const WELCOME_TIMEOUT_MS = 20000;
 
-// STUN для прямого соединения + публичный TURN (Open Relay / Metered)
-// на случай симметричного NAT и заблокированного UDP.
-// Если в настройках введён свой TURN (например, бесплатный аккаунт
-// metered.ca) — добавляем и его: relay-кандидата хозяина достаточно,
-// чтобы гость с любым NAT мог подключиться.
+// Встроенный TURN (бесплатный аккаунт Metered, 20 ГБ/мес — настолке
+// хватает навсегда: трафик игры — килобайты на партию). Благодаря ему
+// любой посетитель страницы может создать комнату и играть с кем угодно
+// без регистрации: relay-кандидата хозяина достаточно, чтобы гость
+// с любым NAT (включая симметричный мобильный) подключился.
+// Если в настройках введён свой TURN — он добавляется поверх.
+const DEFAULT_TURN_USER = 'fbe63033582c5184ffc0c799';
+const DEFAULT_TURN_PASS = 'VMz69x2xUIywNG9W';
+const DEFAULT_TURN_URLS = [
+  'turn:global.relay.metered.ca:80',
+  'turn:global.relay.metered.ca:80?transport=tcp',
+  'turn:global.relay.metered.ca:443',
+  'turns:global.relay.metered.ca:443?transport=tcp',
+];
+
 export function getRtcConfig(): RTCConfiguration {
   const iceServers: RTCIceServer[] = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] },
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
   ];
   try {
     const url = localStorage.getItem('td.turnUrl')?.trim();
@@ -47,7 +42,16 @@ export function getRtcConfig(): RTCConfiguration {
     const credential = localStorage.getItem('td.turnPass') ?? '';
     if (url) iceServers.push({ urls: url, username, credential });
   } catch {
-    // localStorage недоступен — играем без своего TURN
+    // localStorage недоступен — хватит встроенного TURN
+  }
+  if (!iceServers.some((s) => String(s.urls).includes('relay.metered.ca'))) {
+    for (const urls of DEFAULT_TURN_URLS) {
+      iceServers.push({
+        urls,
+        username: DEFAULT_TURN_USER,
+        credential: DEFAULT_TURN_PASS,
+      });
+    }
   }
   return { iceServers };
 }
