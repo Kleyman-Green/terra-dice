@@ -1,27 +1,38 @@
-// Фон «лава-лампа»: тёмно-синий градиент и аморфные шары,
-// медленно всплывающие вверх и слегка отталкивающиеся от курсора
+// Фон «лава-лампа»: настоящие метаболы. Рисуем поле пузырей
+// в маленький буфер, пороговым фильтром по альфе получаем чёткие края,
+// растягиваем на весь экран. Пузыри разных размеров и скоростей
+// всплывают снизу вверх, сливаются и отталкиваются от курсора.
 type Blob = {
   x: number;
   y: number;
   r: number;
   vy: number;
   vx: number;
-  hue: number;
+  color: string;
   phase: number;
   wob: number;
 };
+
+const PALETTE = ['#e6c396', '#de4c71', '#4a5aff'];
+const SCALE = 3; // буфер в 3 раза меньше экрана
+const THRESHOLD = 130; // порог альфы для «тела» пузыря
 
 export function startLava(): void {
   const cv = document.createElement('canvas');
   cv.id = 'lava';
   document.body.prepend(cv);
-  const c = cv.getContext('2d')!;
+  const ctx = cv.getContext('2d')!;
+
+  const low = document.createElement('canvas');
+  const lctx = low.getContext('2d', { willReadFrequently: true })!;
 
   let w = 0;
   let h = 0;
   const resize = (): void => {
     w = cv.width = window.innerWidth;
     h = cv.height = window.innerHeight;
+    low.width = Math.ceil(w / SCALE);
+    low.height = Math.ceil(h / SCALE);
   };
   resize();
   window.addEventListener('resize', resize);
@@ -32,68 +43,77 @@ export function startLava(): void {
     mouse.y = e.clientY;
   });
 
-  const blobs: Blob[] = [];
-  for (let i = 0; i < 12; i++) {
-    blobs.push({
-      x: Math.random() * window.innerWidth,
-      y: Math.random() * window.innerHeight,
-      r: 50 + Math.random() * 90,
-      vy: -(10 + Math.random() * 18), // всплытие, px/с
-      vx: (Math.random() - 0.5) * 8,
-      hue: 205 + Math.random() * 55, // от голубого до фиолетового
+  const spawn = (anywhereY: boolean): Blob => {
+    const r = 14 + Math.random() * 52; // разные размеры
+    return {
+      x: Math.random() * w,
+      y: anywhereY ? Math.random() * h : h + r * 2,
+      r,
+      vy: -(8 + Math.random() * 22) * (70 / (r + 30)), // маленькие быстрее
+      vx: (Math.random() - 0.5) * 5,
+      color: PALETTE[Math.floor(Math.random() * PALETTE.length)],
       phase: Math.random() * Math.PI * 2,
-      wob: 0.4 + Math.random() * 0.8,
-    });
-  }
+      wob: 0.3 + Math.random() * 0.8,
+    };
+  };
+
+  const blobs: Blob[] = [];
+  for (let i = 0; i < 20; i++) blobs.push(spawn(true));
 
   let last = performance.now();
   const frame = (now: number): void => {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
 
-    const bg = c.createLinearGradient(0, 0, 0, h);
-    bg.addColorStop(0, '#070d2b');
-    bg.addColorStop(0.6, '#0d1b4c');
-    bg.addColorStop(1, '#101f5c');
-    c.globalCompositeOperation = 'source-over';
-    c.fillStyle = bg;
-    c.fillRect(0, 0, w, h);
+    lctx.clearRect(0, 0, low.width, low.height);
 
-    c.globalCompositeOperation = 'lighter';
     for (const b of blobs) {
-      // дрейф и всплытие
       b.phase += b.wob * dt;
-      b.x += (b.vx + Math.sin(b.phase) * 12) * dt;
+      b.x += (b.vx + Math.sin(b.phase) * 9) * dt;
       b.y += b.vy * dt;
 
       // отталкивание от курсора
       const dx = b.x - mouse.x;
       const dy = b.y - mouse.y;
       const d = Math.hypot(dx, dy);
-      const R = 170;
+      const R = 140 + b.r;
       if (d < R && d > 0.1) {
-        const f = ((R - d) / R) * 260 * dt;
+        const f = ((R - d) / R) * 190 * dt;
         b.x += (dx / d) * f;
         b.y += (dy / d) * f;
       }
 
-      // всплыл — начинаем снизу
-      if (b.y < -b.r) {
-        b.y = h + b.r;
-        b.x = Math.random() * w;
-      }
-      if (b.x < -b.r) b.x = w + b.r;
-      if (b.x > w + b.r) b.x = -b.r;
+      if (b.y < -b.r * 2.2) Object.assign(b, spawn(false));
+      if (b.x < -b.r * 2) b.x = w + b.r * 2;
+      if (b.x > w + b.r * 2) b.x = -b.r * 2;
 
-      const g = c.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r);
-      g.addColorStop(0, `hsla(${b.hue}, 85%, 62%, 0.5)`);
-      g.addColorStop(0.7, `hsla(${b.hue}, 80%, 50%, 0.18)`);
-      g.addColorStop(1, 'hsla(220, 80%, 50%, 0)');
-      c.fillStyle = g;
-      c.beginPath();
-      c.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      c.fill();
+      // поле пузыря: ядро плотное, хвост длинный — для слияния
+      const lx = b.x / SCALE;
+      const ly = b.y / SCALE;
+      const lr = (b.r * 1.6) / SCALE;
+      const g = lctx.createRadialGradient(lx, ly, 0, lx, ly, lr);
+      g.addColorStop(0, b.color);
+      g.addColorStop(0.6, b.color + 'bb');
+      g.addColorStop(1, b.color + '00');
+      lctx.fillStyle = g;
+      lctx.beginPath();
+      lctx.arc(lx, ly, lr, 0, Math.PI * 2);
+      lctx.fill();
     }
+
+    // пороговый фильтр: альфа выше порога — тело пузыря с чётким краем
+    const img = lctx.getImageData(0, 0, low.width, low.height);
+    const data = img.data;
+    for (let i = 3; i < data.length; i += 4) {
+      const a = data[i];
+      data[i] = a <= THRESHOLD - 25 ? 0 : a >= THRESHOLD + 25 ? 255 : ((a - (THRESHOLD - 25)) / 50) * 255;
+    }
+    lctx.putImageData(img, 0, 0);
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(low, 0, 0, w, h);
 
     requestAnimationFrame(frame);
   };

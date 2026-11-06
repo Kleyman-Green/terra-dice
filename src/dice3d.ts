@@ -1,123 +1,438 @@
-// 3D-кубики, «брошенные на стол»: CSS-куб + Web Animations API
-const SIZE = 56;
-const HALF = SIZE / 2;
+// Физические 3D-кубики: Three.js (рендер) + cannon-es (физика).
+// Кубики вылетают с боков, перекатываются, сталкиваются и останавливаются,
+// после остановки верхняя грань докручивается к выпавшему значению.
+import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
-// как развернуть куб, чтобы нужная грань смотрела на игрока
-const FACE_ROT: Record<number, string> = {
-  1: 'rotateX(0deg) rotateY(0deg)',
-  2: 'rotateX(90deg)',
-  3: 'rotateY(-90deg)',
-  4: 'rotateY(90deg)',
-  5: 'rotateX(-90deg)',
-  6: 'rotateY(180deg)',
+type Die = {
+  mesh: THREE.Mesh;
+  body: CANNON.Body;
+  target: number; // значение, которое должно оказаться сверху
+  corrected: boolean;
 };
 
-const PIPS: Record<number, string[]> = {
-  1: ['c'],
-  2: ['tl', 'br'],
-  3: ['tl', 'c', 'br'],
-  4: ['tl', 'tr', 'bl', 'br'],
-  5: ['tl', 'tr', 'c', 'bl', 'br'],
-  6: ['tl', 'tr', 'ml', 'mr', 'bl', 'br'],
+type Correction = {
+  die: Die;
+  from: THREE.Quaternion;
+  to: THREE.Quaternion;
+  y0: number;
+  start: number;
 };
 
-// размещение граней куба
-const FACE_POS: [number, string][] = [
-  [1, 'rotateY(0deg)'],
-  [6, 'rotateY(180deg)'],
-  [3, 'rotateY(90deg)'],
-  [4, 'rotateY(-90deg)'],
-  [5, 'rotateX(90deg)'],
-  [2, 'rotateX(-90deg)'],
+const DIE = 1.15; // размер кубика в мировых единицах
+const UP = new THREE.Vector3(0, 1, 0);
+
+// локальная ось грани -> её значение
+const AXES: [THREE.Vector3, number][] = [
+  [new THREE.Vector3(0, 0, 1), 1], // front
+  [new THREE.Vector3(0, 0, -1), 6], // back
+  [new THREE.Vector3(1, 0, 0), 3], // right
+  [new THREE.Vector3(-1, 0, 0), 4], // left
+  [new THREE.Vector3(0, 1, 0), 5], // top
+  [new THREE.Vector3(0, -1, 0), 2], // bottom
 ];
 
 let layer: HTMLElement | null = null;
+let renderer: THREE.WebGLRenderer | null = null;
+let scene: THREE.Scene | null = null;
+let camera: THREE.PerspectiveCamera | null = null;
+let world: CANNON.World | null = null;
+let walls: CANNON.Body[] = [];
+let dice: Die[] = [];
+let corrections: Correction[] = [];
+let raf = 0;
+let stillSince = 0;
+let thrownAt = 0;
+let bounds = { minX: -4, maxX: 4, minZ: -3, maxZ: 3 };
 
-function getLayer(): HTMLElement {
-  if (!layer) {
-    layer = document.createElement('div');
-    layer.id = 'diceLayer';
-    document.body.appendChild(layer);
+// ---------- текстуры граней ----------
+const texCache = new Map<string, THREE.CanvasTexture>();
+
+function faceTexture(content: number | string): THREE.CanvasTexture {
+  const key = String(content);
+  const cached = texCache.get(key);
+  if (cached) return cached;
+
+  const S = 256;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const c = cv.getContext('2d')!;
+
+  // перламутрово-синяя грань
+  const g = c.createLinearGradient(0, 0, S, S);
+  g.addColorStop(0, '#f4f7ff');
+  g.addColorStop(0.55, '#b9c6f7');
+  g.addColorStop(1, '#7e93e8');
+  c.fillStyle = g;
+  c.beginPath();
+  c.roundRect(0, 0, S, S, 26);
+  c.fill();
+  c.strokeStyle = 'rgba(70, 90, 180, 0.55)';
+  c.lineWidth = 6;
+  c.stroke();
+
+  if (typeof content === 'string') {
+    // удвоенный кубик (7..12): крупная оранжевая цифра
+    c.fillStyle = '#ff7d1a';
+    c.font = '800 130px Nunito, system-ui, sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.shadowColor = 'rgba(120, 40, 0, 0.35)';
+    c.shadowBlur = 6;
+    c.fillText(content, S / 2, S / 2 + 6);
+  } else {
+    const PIPS: Record<number, [number, number][]> = {
+      1: [[0.5, 0.5]],
+      2: [
+        [0.28, 0.28],
+        [0.72, 0.72],
+      ],
+      3: [
+        [0.28, 0.28],
+        [0.5, 0.5],
+        [0.72, 0.72],
+      ],
+      4: [
+        [0.28, 0.28],
+        [0.72, 0.28],
+        [0.28, 0.72],
+        [0.72, 0.72],
+      ],
+      5: [
+        [0.28, 0.28],
+        [0.72, 0.28],
+        [0.5, 0.5],
+        [0.28, 0.72],
+        [0.72, 0.72],
+      ],
+      6: [
+        [0.28, 0.28],
+        [0.72, 0.28],
+        [0.28, 0.5],
+        [0.72, 0.5],
+        [0.28, 0.72],
+        [0.72, 0.72],
+      ],
+    };
+    for (const [px, py] of PIPS[content]) {
+      const x = px * S;
+      const y = py * S;
+      const r = S * 0.085;
+      const pg = c.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r);
+      pg.addColorStop(0, '#ffb35c');
+      pg.addColorStop(1, '#ff7d1a');
+      c.shadowColor = 'rgba(120, 40, 0, 0.45)';
+      c.shadowBlur = 5;
+      c.fillStyle = pg;
+      c.beginPath();
+      c.arc(x, y, r, 0, Math.PI * 2);
+      c.fill();
+    }
   }
-  return layer;
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  texCache.set(key, tex);
+  return tex;
 }
 
-function buildCube(value: number): HTMLElement {
-  const cube = document.createElement('div');
-  cube.className = 'cube3d';
-  for (const [faceValue, pos] of FACE_POS) {
-    const face = document.createElement('div');
-    face.className = 'face3d';
-    face.style.transform = `${pos} translateZ(${HALF}px)`;
-    if (faceValue === 1 && value > 6) {
-      // грань удвоенного кубика — просто крупная цифра
-      const n = document.createElement('span');
-      n.className = 'face-num';
-      n.textContent = String(value);
-      face.appendChild(n);
+// ---------- сцена ----------
+function init(): void {
+  if (renderer) return;
+
+  layer = document.createElement('div');
+  layer.id = 'diceLayer';
+  document.body.appendChild(layer);
+
+  renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  layer.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 15, 10);
+  camera.lookAt(0, 0, 0.8);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+  sun.position.set(6, 14, 5);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.camera.left = -12;
+  sun.shadow.camera.right = 12;
+  sun.shadow.camera.top = 12;
+  sun.shadow.camera.bottom = -12;
+  scene.add(sun);
+
+  world = new CANNON.World({ gravity: new CANNON.Vec3(0, -32, 0) });
+  world.defaultContactMaterial.restitution = 0.35;
+  world.defaultContactMaterial.friction = 0.15;
+
+  // стол: видимая тень + физическая плоскость
+  const floorMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(200, 200),
+    new THREE.ShadowMaterial({ opacity: 0.28 }),
+  );
+  floorMesh.rotation.x = -Math.PI / 2;
+  floorMesh.receiveShadow = true;
+  scene.add(floorMesh);
+
+  const floor = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
+  floor.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+  world.addBody(floor);
+
+  const onResize = (): void => {
+    if (!renderer || !camera) return;
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    updateBounds();
+  };
+  window.addEventListener('resize', onResize);
+  onResize();
+}
+
+// точка экрана -> точка на плоскости стола (y=0)
+function screenToPlane(px: number, py: number): THREE.Vector3 {
+  camera!.updateMatrixWorld(true);
+  const v = new THREE.Vector3(
+    (px / window.innerWidth) * 2 - 1,
+    -(py / window.innerHeight) * 2 + 1,
+    0.5,
+  );
+  v.unproject(camera!);
+  const dir = v.sub(camera!.position).normalize();
+  const t = -camera!.position.y / dir.y;
+  return camera!.position.clone().add(dir.multiplyScalar(t));
+}
+
+// границы стола = границы доски на экране
+function updateBounds(): void {
+  const board = document.getElementById('board');
+  if (!board || !camera || !world) return;
+  const r = board.getBoundingClientRect();
+  if (r.width === 0) return;
+  // все четыре угла — берём min/max, чтобы не зависеть от порядка
+  const pts = [
+    screenToPlane(r.left, r.top),
+    screenToPlane(r.right, r.top),
+    screenToPlane(r.left, r.bottom),
+    screenToPlane(r.right, r.bottom),
+  ];
+  bounds = {
+    minX: Math.min(...pts.map((p) => p.x)),
+    maxX: Math.max(...pts.map((p) => p.x)),
+    minZ: Math.min(...pts.map((p) => p.z)),
+    maxZ: Math.max(...pts.map((p) => p.z)),
+  };
+
+  // пересоздаём невидимые бортики по краям доски
+  for (const w of walls) world.removeBody(w);
+  walls = [];
+  const H = 9; // высокие, чтобы кубики не перелетали
+  const cx = (bounds.minX + bounds.maxX) / 2;
+  const cz = (bounds.minZ + bounds.maxZ) / 2;
+  const halfX = (bounds.maxX - bounds.minX) / 2;
+  const halfZ = (bounds.maxZ - bounds.minZ) / 2;
+  const defs: [number, number, number, number][] = [
+    // [x, z, halfX, halfZ] — левый, правый, верхний, нижний борт
+    [bounds.minX - 0.5, cz, 0.5, halfZ + 1],
+    [bounds.maxX + 0.5, cz, 0.5, halfZ + 1],
+    [cx, bounds.minZ - 0.5, halfX + 1, 0.5],
+    [cx, bounds.maxZ + 0.5, halfX + 1, 0.5],
+  ];
+  for (const [x, z, hx, hz] of defs) {
+    const wall = new CANNON.Body({
+      type: CANNON.Body.STATIC,
+      shape: new CANNON.Box(new CANNON.Vec3(hx, H, hz)),
+    });
+    wall.position.set(x, H / 2, z);
+    world.addBody(wall);
+    walls.push(wall);
+  }
+}
+
+function makeDie(value: number): Die {
+  // порядок материалов BoxGeometry: +x, -x, +y, -y, +z, -z
+  const front: number | string = value > 6 ? String(value) : 1;
+  const mats = [
+    faceTexture(3),
+    faceTexture(4),
+    faceTexture(5),
+    faceTexture(2),
+    faceTexture(front),
+    faceTexture(6),
+  ].map(
+    (map) =>
+      new THREE.MeshStandardMaterial({ map, roughness: 0.35, metalness: 0.05 }),
+  );
+  const mesh = new THREE.Mesh(new RoundedBoxGeometry(DIE, DIE, DIE, 4, 0.09), mats);
+  mesh.castShadow = true;
+  scene!.add(mesh);
+
+  const body = new CANNON.Body({
+    mass: 1,
+    shape: new CANNON.Box(new CANNON.Vec3(DIE / 2, DIE / 2, DIE / 2)),
+    angularDamping: 0.12,
+    linearDamping: 0.06,
+  });
+  world!.addBody(body);
+  return { mesh, body, target: value, corrected: false };
+}
+
+function targetAxis(v: number): THREE.Vector3 {
+  if (v > 6) return new THREE.Vector3(0, 0, 1); // цифра на front-грани
+  // клонируем — applyQuaternion мутирует вектор
+  return AXES.find(([, val]) => val === v)![0].clone();
+}
+
+// докрутка верхней грани к выпавшему значению
+function correctDie(die: Die, now: number): void {
+  const q = new THREE.Quaternion(
+    die.body.quaternion.x,
+    die.body.quaternion.y,
+    die.body.quaternion.z,
+    die.body.quaternion.w,
+  );
+  const d = targetAxis(die.target).applyQuaternion(q);
+  const corr = new THREE.Quaternion().setFromUnitVectors(d.normalize(), UP);
+  const to = corr.multiply(q);
+  corrections.push({ die, from: q.clone(), to, y0: die.body.position.y, start: now });
+  die.corrected = true;
+}
+
+function loop(): void {
+  raf = requestAnimationFrame(loop);
+  const now = performance.now();
+
+  if (world) world.fixedStep();
+  for (const die of dice) {
+    // страховка: если кубик каким-то образом улетел за поле — возвращаем в центр
+    const p = die.body.position;
+    if (
+      p.y < -2 ||
+      p.x < bounds.minX - 3 ||
+      p.x > bounds.maxX + 3 ||
+      p.z < bounds.minZ - 3 ||
+      p.z > bounds.maxZ + 3
+    ) {
+      p.set(
+        (bounds.minX + bounds.maxX) / 2 + (Math.random() - 0.5) * 2,
+        2,
+        (bounds.minZ + bounds.maxZ) / 2 + (Math.random() - 0.5) * 2,
+      );
+      die.body.velocity.set((Math.random() - 0.5) * 2, 0, (Math.random() - 0.5) * 2);
+    }
+    if (!die.corrected) {
+      die.mesh.position.copy(die.body.position as unknown as THREE.Vector3);
+      die.mesh.quaternion.copy(die.body.quaternion as unknown as THREE.Quaternion);
+    }
+  }
+
+  // ждём остановки, затем докручиваем
+  if (dice.length && !corrections.length && dice.some((d) => !d.corrected)) {
+    const still = dice.every(
+      (d) => d.body.velocity.length() < 0.12 && d.body.angularVelocity.length() < 0.12,
+    );
+    if (still) {
+      if (!stillSince) stillSince = now;
+      if (now - stillSince > 350) dice.forEach((d) => correctDie(d, now));
     } else {
-      for (const cls of PIPS[faceValue]) {
-        const pip = document.createElement('span');
-        pip.className = `pip ${cls}`;
-        face.appendChild(pip);
+      stillSince = 0;
+      // страховка от бесконечного катания
+      if (now - thrownAt > 5000) {
+        dice.forEach((d) => {
+          d.body.velocity.setZero();
+          d.body.angularVelocity.setZero();
+        });
       }
     }
-    cube.appendChild(face);
   }
-  return cube;
+
+  // анимация докрутки
+  corrections = corrections.filter((cr) => {
+    const t = Math.min(1, (now - cr.start) / 350);
+    const k = t * t * (3 - 2 * t); // smoothstep
+    cr.die.mesh.quaternion.slerpQuaternions(cr.from, cr.to, k);
+    cr.die.mesh.position.y = cr.y0 + Math.sin(t * Math.PI) * 0.22; // лёгкий подскок
+    if (t >= 1) {
+      cr.die.body.quaternion.copy(cr.to as unknown as CANNON.Quaternion);
+      return false;
+    }
+    return true;
+  });
+
+  renderer?.render(scene!, camera!);
 }
 
 export function throwDice(values: [number, number]): void {
+  init();
   clearDice(true);
-  const host = getLayer();
-  const board = document.getElementById('board');
-  const r = board?.getBoundingClientRect();
+  updateBounds();
 
-  values.forEach((v, i) => {
-    const cube = buildCube(v);
-    host.appendChild(cube);
+  dice = values.map((v, i) => {
+    const die = makeDie(v);
+    const fromLeft = i % 2 === 0;
+    const midZ = (bounds.minZ + bounds.maxZ) / 2;
+    const spanZ = bounds.maxZ - bounds.minZ;
 
-    const areaW = (r?.width ?? 300) - SIZE - 24;
-    const areaH = (r?.height ?? 300) - SIZE - 24;
-    const lx = (r ? r.left : window.innerWidth / 2 - 150) + 12 + Math.random() * areaW;
-    const ly = (r ? r.top : window.innerHeight / 2 - 150) + 12 + Math.random() * areaH;
-
-    const base = v <= 6 ? FACE_ROT[v] : 'rotateX(0deg) rotateY(0deg)';
-    const sx = 720 + Math.floor(Math.random() * 3) * 360;
-    const sy = 720 + Math.floor(Math.random() * 3) * 360;
-    const tilt = Math.random() * 30 - 15;
-    const orient = `rotateZ(${tilt}deg) ${base} rotateX(${sx}deg) rotateY(${sy}deg)`;
-
-    const x0 = lx + (Math.random() * 240 - 120);
-    const y0 = -160 - i * 70;
-
-    cube.animate(
-      [
-        { transform: `translate(${x0}px, ${y0}px)`, opacity: 0.5 },
-        { transform: `translate(${lx}px, ${ly}px) ${orient} scale(1.12, 0.85)`, offset: 0.72 },
-        { transform: `translate(${lx}px, ${ly - 26}px) ${orient}`, offset: 0.86 },
-        { transform: `translate(${lx}px, ${ly}px) ${orient}` },
-      ],
-      {
-        duration: 950 + i * 140,
-        easing: 'cubic-bezier(.2,.7,.3,1)',
-        fill: 'forwards',
-      },
+    // вылетают из-за бортиков внутрь поля, навстречу друг другу
+    die.body.position.set(
+      fromLeft ? bounds.minX + DIE * 0.8 : bounds.maxX - DIE * 0.8,
+      1.1 + Math.random() * 0.7,
+      midZ + (Math.random() - 0.5) * spanZ * 0.5,
     );
+    die.body.quaternion.setFromEuler(
+      Math.random() * Math.PI * 2,
+      Math.random() * Math.PI * 2,
+      Math.random() * Math.PI * 2,
+    );
+    const speed = 6 + Math.random() * 2.5;
+    die.body.velocity.set(
+      fromLeft ? speed : -speed,
+      0.4 + Math.random() * 1.0,
+      (Math.random() - 0.5) * 3,
+    );
+    die.body.angularVelocity.set(
+      (Math.random() - 0.5) * 30,
+      (Math.random() - 0.5) * 30,
+      (Math.random() - 0.5) * 30,
+    );
+    return die;
   });
+
+  stillSince = 0;
+  corrections = [];
+  thrownAt = performance.now();
+  if (!raf) loop();
 }
 
 export function clearDice(instant = false): void {
-  if (!layer) return;
-  for (const el of [...layer.children]) {
+  for (const die of dice) {
     if (instant) {
-      el.remove();
+      scene?.remove(die.mesh);
+      world?.removeBody(die.body);
     } else {
-      const a = (el as HTMLElement).animate([{ opacity: 1 }, { opacity: 0 }], {
-        duration: 350,
-        fill: 'forwards',
-      });
-      a.onfinish = () => el.remove();
+      // быстрое растворение
+      const mesh = die.mesh;
+      const body = die.body;
+      const start = performance.now();
+      const fade = (): void => {
+        const t = (performance.now() - start) / 300;
+        mesh.scale.setScalar(Math.max(0.001, 1 - t));
+        if (t < 1) {
+          requestAnimationFrame(fade);
+        } else {
+          scene?.remove(mesh);
+          world?.removeBody(body);
+        }
+      };
+      fade();
     }
   }
+  dice = [];
+  corrections = [];
 }
