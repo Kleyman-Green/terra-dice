@@ -1,0 +1,11 @@
+body { font-family: system-ui, sans-serif; background: #f4f4f6; margin: 0; }
+#app { max-width: 900px; margin: 0 auto; padding: 16px; }
+#setup { display: flex; gap: 16px; flex-wrap: wrap; align-items: end; }
+#setup label { display: flex; flex-direction: column; font-size: 14px; }
+input, select, button { font-size: 16px; padding: 6px 10px; }
+button { cursor: pointer; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+#status { font-size: 18px; margin-bottom: 8px; }
+#controls { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+#message { min-height: 24px; margin-bottom: 8px; color: #b03a2e; font-weight: 600; }
+canvas { background: #fff; border: 2px solid #333; touch-action: none; max-width: 100%; }

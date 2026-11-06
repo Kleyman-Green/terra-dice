@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Terra Dice</title>
+  </head>
+  <body>
+    <div id="app">
+      <h1>Terra Dice</h1>
+
+      <div id="setup">
+        <label>Ширина поля <input id="inW" type="number" value="12" min="4" max="40" /></label>
+        <label>Высота поля <input id="inH" type="number" value="12" min="4" max="40" /></label>
+        <label>Игроков
+          <select id="inP">
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </label>
+        <button id="btnStart">Начать игру</button>
+      </div>
+
+      <div id="game" hidden>
+        <div id="status"></div>
+        <div id="controls">
+          <button id="btnRoll">Бросить кубики</button>
+          <button id="btnRotate">Повернуть (R)</button>
+          <button id="btnNew">Новая игра</button>
+        </div>
+        <div id="message"></div>
+        <canvas id="board"></canvas>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
