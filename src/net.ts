@@ -22,7 +22,6 @@ const WELCOME_TIMEOUT_MS = 20000;
 // любой посетитель страницы может создать комнату и играть с кем угодно
 // без регистрации: relay-кандидата хозяина достаточно, чтобы гость
 // с любым NAT (включая симметричный мобильный) подключился.
-// Если в настройках введён свой TURN — он добавляется поверх.
 const DEFAULT_TURN_USER = 'fbe63033582c5184ffc0c799';
 const DEFAULT_TURN_PASS = 'VMz69x2xUIywNG9W';
 const DEFAULT_TURN_URLS = [
@@ -36,22 +35,12 @@ export function getRtcConfig(): RTCConfiguration {
   const iceServers: RTCIceServer[] = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] },
   ];
-  try {
-    const url = localStorage.getItem('td.turnUrl')?.trim();
-    const username = localStorage.getItem('td.turnUser')?.trim();
-    const credential = localStorage.getItem('td.turnPass') ?? '';
-    if (url) iceServers.push({ urls: url, username, credential });
-  } catch {
-    // localStorage недоступен — хватит встроенного TURN
-  }
-  if (!iceServers.some((s) => String(s.urls).includes('relay.metered.ca'))) {
-    for (const urls of DEFAULT_TURN_URLS) {
-      iceServers.push({
-        urls,
-        username: DEFAULT_TURN_USER,
-        credential: DEFAULT_TURN_PASS,
-      });
-    }
+  for (const urls of DEFAULT_TURN_URLS) {
+    iceServers.push({
+      urls,
+      username: DEFAULT_TURN_USER,
+      credential: DEFAULT_TURN_PASS,
+    });
   }
   return { iceServers };
 }

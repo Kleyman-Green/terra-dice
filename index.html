@@ -18,8 +18,8 @@
       <div id="setup">
         <fieldset>
           <legend>Поле</legend>
-          <label>Ширина <input id="inW" type="number" value="12" min="4" max="40" /></label>
-          <label>Высота <input id="inH" type="number" value="12" min="4" max="40" /></label>
+          <label>Ширина <input id="inW" type="number" value="30" min="4" max="40" /></label>
+          <label>Высота <input id="inH" type="number" value="30" min="4" max="40" /></label>
           <label>Игроков
             <select id="inP">
               <option value="2">2</option>
@@ -31,7 +31,9 @@
 
         <fieldset>
           <legend>Режимы</legend>
-          <label class="row"><input id="inWalls" type="checkbox" /> Стены</label>
+          <label class="row"><input id="inWalls" type="checkbox" /> Стены
+            <span class="help" data-tip="На поле случайно появляются препятствия. Блок нельзя ставить сквозь стену, а примыкание к своей территории через стену не считается. Плотность задаёт количество стен. В стартовых углах игроков (зона 5×5) стен нет.">?</span>
+          </label>
           <label>Плотность стен
             <select id="inDensity">
               <option value="0.04">мало</option>
@@ -39,7 +41,9 @@
               <option value="0.15">много</option>
             </select>
           </label>
-          <label class="row"><input id="inCards" type="checkbox" /> Карточки усилений</label>
+          <label class="row"><input id="inCards" type="checkbox" /> Карточки усилений
+            <span class="help" data-tip="Перед первым ходом каждый игрок выбирает одну карточку — бонус на партию: переброс кубиков, третий куб, блокировка поворота у соперника и т.д. Ещё карты дают подсвеченные бонусные клетки на поле — захвати такую клетку и получи случайную карту.">?</span>
+          </label>
           <label>Таймер хода
             <select id="inTimer">
               <option value="0" selected>выключен</option>
@@ -54,22 +58,32 @@
         <fieldset class="actions">
           <button id="btnStart">Играть на одном экране</button>
           <button id="btnHost">Создать онлайн-комнату</button>
+          <button id="btnHelp" type="button">Как играть</button>
         </fieldset>
+      </div>
 
-        <details id="turnDetails">
-          <summary>Свой TURN-сервер (необязательно — уже встроен)</summary>
-          <p class="hint">
-            Онлайн-игра работает из коробки: TURN-ретранслятор на случай строгого NAT
-            уже встроен, ничего настраивать не нужно — ни вам, ни друзьям.
-            Эти поля — только если хотите использовать свой сервер (например, свой
-            аккаунт metered.ca): они заменят встроенный.
-          </p>
-          <label>URL <input id="turnUrl" type="text" placeholder="turns:global.relay.metered.ca:443?transport=tcp" /></label>
-          <label>Логин <input id="turnUser" type="text" autocomplete="off" /></label>
-          <label>Пароль <input id="turnPass" type="password" autocomplete="off" /></label>
-          <button id="btnTurnSave">Сохранить</button>
-          <span id="turnStatus"></span>
-        </details>
+      <div id="help" hidden>
+        <div id="helpBox">
+          <h2>Как играть в Terra Dice</h2>
+          <p><b>Цель.</b> К концу партии занять больше всех клеток поля.</p>
+          <p><b>Ход.</b> Нажми «Бросить кубики». Выпавшие числа — стороны прямоугольника
+            (например, 5 и 4 → блок 5×4). Кнопка «Повернуть» или клавиша R меняет его
+            ориентацию. Наведи мышь на поле — пунктир покажет, куда встанет блок,
+            клик — поставить.</p>
+          <p><b>Первая постановка</b> должна накрывать твой угол. Каждая следующая —
+            примыкать к твоей территории стороной.</p>
+          <p><b>Стены</b> (если включены) — препятствия: сквозь них нельзя ни ставить
+            блок, ни примыкать. Углы игроков (5×5) — безопасная зона без стен.</p>
+          <p><b>Карточки</b> (если включены) выбираются один раз перед первым ходом.
+            Подсвеченные бонусные клетки на поле дают случайную карту тому, кто их
+            захватит.</p>
+          <p><b>Конец игры.</b> Если игрок не может ничего поставить — он пропускает
+            ход. Когда никто не может ходить, партия заканчивается, и побеждает
+            занявший больше клеток.</p>
+          <p><b>Онлайн.</b> «Создать онлайн-комнату» → отправь ссылку друзьям,
+            регистрация не нужна. «Новая игра» перезапускает партию без новой комнаты.</p>
+          <button id="btnHelpClose">Понятно!</button>
+        </div>
       </div>
 
       <div id="names" hidden>

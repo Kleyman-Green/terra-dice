@@ -918,23 +918,14 @@ if (room) {
   $('join').hidden = false;
 }
 
-// свой TURN-сервер (необязательно) — хранится локально
-try {
-  $<HTMLInputElement>('turnUrl').value = localStorage.getItem('td.turnUrl') ?? '';
-  $<HTMLInputElement>('turnUser').value = localStorage.getItem('td.turnUser') ?? '';
-  $<HTMLInputElement>('turnPass').value = localStorage.getItem('td.turnPass') ?? '';
-} catch {
-  // localStorage недоступен
-}
-$('btnTurnSave').addEventListener('click', () => {
-  try {
-    localStorage.setItem('td.turnUrl', $<HTMLInputElement>('turnUrl').value);
-    localStorage.setItem('td.turnUser', $<HTMLInputElement>('turnUser').value);
-    localStorage.setItem('td.turnPass', $<HTMLInputElement>('turnPass').value);
-    $('turnStatus').textContent = 'Сохранено — применится к новым комнатам';
-  } catch {
-    $('turnStatus').textContent = 'Не удалось сохранить (localStorage недоступен)';
-  }
+$('btnHelp').addEventListener('click', () => {
+  $('help').hidden = false;
+});
+$('btnHelpClose').addEventListener('click', () => {
+  $('help').hidden = true;
+});
+$('help').addEventListener('click', (e) => {
+  if (e.target === $('help')) $('help').hidden = true;
 });
 
 startLava();
