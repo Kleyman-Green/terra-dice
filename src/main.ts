@@ -17,6 +17,8 @@ import type { CardId, ConfigInput, GameState, Placement } from './core/types';
 import { createGuest, createHost, makeCode } from './net';
 import type { ClientMsg, GuestLink, HostLink, HostMsg } from './net';
 import { isMuted, setMuted, sounds } from './sound';
+import { startLava } from './bg';
+import { clearDice, throwDice } from './dice3d';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -47,7 +49,6 @@ let botEnabled = false;
 let botTimer: number | null = null;
 let ratingSaved = false;
 let diceKey = '';
-let diceAnimTimer: number | null = null;
 
 let roomCode: string | null = null;
 let roomFull = false;
@@ -200,28 +201,6 @@ function ratingText(): string {
   return 'Рейтинг побед: ' + top.map(([n, w]) => `${esc(n)} — ${w}`).join(', ');
 }
 
-function animateDice(final: [number, number]): void {
-  const d1 = $('die1');
-  const d2 = $('die2');
-  if (diceAnimTimer) clearInterval(diceAnimTimer);
-  d1.classList.add('rolling');
-  d2.classList.add('rolling');
-  sounds.roll();
-  let ticks = 0;
-  diceAnimTimer = window.setInterval(() => {
-    d1.textContent = String(Math.floor(Math.random() * 6) + 1);
-    d2.textContent = String(Math.floor(Math.random() * 6) + 1);
-    if (++ticks >= 8) {
-      clearInterval(diceAnimTimer!);
-      diceAnimTimer = null;
-      d1.classList.remove('rolling');
-      d2.classList.remove('rolling');
-      d1.textContent = String(final[0]);
-      d2.textContent = String(final[1]);
-    }
-  }, 70);
-}
-
 function updateTimer(): void {
   const el = $('timer');
   if (!state?.deadline || state.finished) {
@@ -367,24 +346,17 @@ function updateUI(): void {
   $('status').innerHTML = `${text}${you}<br><small class="scores">${scores} | без постановок подряд: ${state.idleTurns}</small>`;
   $('message').textContent = message;
 
-  // кубики
-  const d1 = $('die1');
-  const d2 = $('die2');
+  // кубики: бросаем 3D-кубики на стол
   if (state.dice) {
-    d1.hidden = false;
-    d2.hidden = false;
     const key = state.dice.join(',');
     if (key !== diceKey) {
       diceKey = key;
-      animateDice(state.dice);
-    } else if (!diceAnimTimer) {
-      d1.textContent = String(state.dice[0]);
-      d2.textContent = String(state.dice[1]);
+      sounds.roll();
+      throwDice(state.dice);
     }
   } else {
+    if (diceKey) clearDice();
     diceKey = '';
-    d1.hidden = true;
-    d2.hidden = true;
   }
 
   updateTimer();
@@ -934,3 +906,5 @@ if (room) {
   $('setup').hidden = true;
   $('join').hidden = false;
 }
+
+startLava();
