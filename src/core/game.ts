@@ -176,9 +176,44 @@ export function wallsConnected(config: Config, walls: number[]): boolean {
   return seen.size === width * height;
 }
 
+// Расшифровка кода грани: [x, y, nx, ny] — две клетки, которые она разделяет
+export function edgeCells(
+  w: number,
+  width: number,
+  height: number,
+): [number, number, number, number] {
+  const vCount = (width - 1) * height;
+  if (w < vCount) {
+    const x = w % (width - 1);
+    const y = Math.floor(w / (width - 1));
+    return [x, y, x + 1, y];
+  }
+  const hId = w - vCount;
+  const x = hId % width;
+  const y = Math.floor(hId / width);
+  return [x, y, x, y + 1];
+}
+
+// Безопасная зона у углов игроков: квадрат до 5×5 без стен,
+// чтобы стартовать было легко
+export function inSafeZone(config: Config, x: number, y: number): boolean {
+  const z = Math.min(5, Math.floor(Math.min(config.width, config.height) / 2));
+  if (z < 1) return false;
+  for (let p = 1; p <= config.players; p++) {
+    const c = corner(config, p);
+    if (Math.abs(x - c.x) < z && Math.abs(y - c.y) < z) return true;
+  }
+  return false;
+}
+
 export function generateWalls(config: Config, rng: Rng = Math.random): number[] {
   if (!config.walls) return [];
-  const edges = allInternalEdges(config.width, config.height);
+  // стены не ставим внутри безопасных зон у углов
+  const edges = allInternalEdges(config.width, config.height).filter((e) => {
+    const [x, y, nx, ny] = edgeCells(e, config.width, config.height);
+    return !(inSafeZone(config, x, y) && inSafeZone(config, nx, ny));
+  });
+  if (!edges.length) return [];
   for (let attempt = 0; attempt < 60; attempt++) {
     const walls = edges.filter(() => rng() < config.wallDensity);
     if (walls.length > 0 && wallsConnected(config, walls)) return walls.sort((a, b) => a - b);

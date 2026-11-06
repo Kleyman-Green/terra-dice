@@ -4,7 +4,9 @@ import {
   chooseDice,
   createGame,
   currentMoves,
+  edgeCells,
   generateWalls,
+  inSafeZone,
   legalPlacements,
   mulberry32,
   pickOffer,
@@ -110,6 +112,19 @@ describe('стены', () => {
       const c = { width: 10, height: 10, players: 3, walls: true, wallDensity: 0.25 };
       const walls = generateWalls({ ...createGame(c).config }, mulberry32(seed));
       expect(wallsConnected({ ...createGame(c).config }, walls)).toBe(true);
+    }
+  });
+
+  it('стены не заходят в безопасную зону 5×5 у углов', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const c = { width: 12, height: 12, players: 4, walls: true, wallDensity: 0.3 };
+      const config = { ...createGame(c).config };
+      const walls = generateWalls(config, mulberry32(seed));
+      expect(walls.length).toBeGreaterThan(0);
+      for (const w of walls) {
+        const [x, y, nx, ny] = edgeCells(w, config.width, config.height);
+        expect(inSafeZone(config, x, y) && inSafeZone(config, nx, ny)).toBe(false);
+      }
     }
   });
 });

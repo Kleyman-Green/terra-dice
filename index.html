@@ -28,9 +28,9 @@
           <label class="row"><input id="inWalls" type="checkbox" /> Стены</label>
           <label>Плотность стен
             <select id="inDensity">
-              <option value="0.08">мало</option>
-              <option value="0.15" selected>средне</option>
-              <option value="0.25">много</option>
+              <option value="0.04">мало</option>
+              <option value="0.08" selected>средне</option>
+              <option value="0.15">много</option>
             </select>
           </label>
           <label class="row"><input id="inCards" type="checkbox" /> Карточки усилений</label>
@@ -45,15 +45,16 @@
           <label class="row"><input id="inBot" type="checkbox" /> Бот за 2-го игрока (локально)</label>
         </fieldset>
 
-        <fieldset>
-          <legend>Игроки</legend>
-          <div id="playerRows"></div>
-        </fieldset>
-
         <fieldset class="actions">
           <button id="btnStart">Играть на одном экране</button>
           <button id="btnHost">Создать онлайн-комнату</button>
         </fieldset>
+      </div>
+
+      <div id="names" hidden>
+        <p id="namesHint"></p>
+        <div id="playerRows"></div>
+        <button id="btnGo"></button>
       </div>
 
       <div id="join" hidden>

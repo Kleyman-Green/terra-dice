@@ -739,6 +739,7 @@ function setupBoard(): void {
   ratingSaved = false;
   diceKey = '';
   $('setup').hidden = true;
+  $('names').hidden = true;
   $('join').hidden = true;
   $('lobby').hidden = true;
   $('info').hidden = true;
@@ -814,9 +815,12 @@ function buildColorPicker(container: HTMLElement, initial: string, onPick: (c: s
   });
 }
 
-// строки «ник + цвет» по числу игроков
+// строки «ник + цвет»: для локальной игры — все игроки, для онлайн — только ты
+let setupMode: 'local' | 'host' = 'local';
+
 function rebuildPlayerRows(): void {
-  const n = parseInt($<HTMLSelectElement>('inP').value);
+  const total = parseInt($<HTMLSelectElement>('inP').value);
+  const n = setupMode === 'local' ? total : 1;
   const box = $('playerRows');
   box.innerHTML = '';
   playersSetup.length = 0;
@@ -826,7 +830,7 @@ function rebuildPlayerRows(): void {
     row.className = 'prow';
     const inp = document.createElement('input');
     inp.maxLength = 16;
-    inp.placeholder = `Игрок ${i + 1}`;
+    inp.placeholder = setupMode === 'local' ? `Игрок ${i + 1}` : 'Твой ник';
     const idx = i;
     inp.addEventListener('input', () => {
       playersSetup[idx].nick = inp.value;
@@ -839,8 +843,20 @@ function rebuildPlayerRows(): void {
   }
 }
 
-rebuildPlayerRows();
-$<HTMLSelectElement>('inP').addEventListener('change', rebuildPlayerRows);
+// поля ников появляются только после выбора режима
+function chooseSetupMode(m: 'local' | 'host'): void {
+  setupMode = m;
+  $('names').hidden = false;
+  $('namesHint').textContent =
+    m === 'local'
+      ? 'Представьтесь — все играют на этом экране:'
+      : 'Представься — у остальных игроков будет свой экран:';
+  $('btnGo').textContent = m === 'local' ? 'Начать игру' : 'Создать комнату';
+  $('btnStart').classList.toggle('sel', m === 'local');
+  $('btnHost').classList.toggle('sel', m === 'host');
+  rebuildPlayerRows();
+}
+
 buildColorPicker($('joinColorBox'), joinColor, (c) => {
   joinColor = c;
 });
@@ -878,8 +894,15 @@ window.addEventListener('keydown', (e) => {
   if (k === 'r' || k === 'к') onRotate();
 });
 
-$('btnStart').addEventListener('click', startLocal);
-$('btnHost').addEventListener('click', startHosting);
+$('btnStart').addEventListener('click', () => chooseSetupMode('local'));
+$('btnHost').addEventListener('click', () => chooseSetupMode('host'));
+$('btnGo').addEventListener('click', () => {
+  if (setupMode === 'local') startLocal();
+  else startHosting();
+});
+$<HTMLSelectElement>('inP').addEventListener('change', () => {
+  if (!$('names').hidden) rebuildPlayerRows();
+});
 $('btnJoin').addEventListener('click', joinAsGuest);
 $('btnRoll').addEventListener('click', onRoll);
 $('btnRotate').addEventListener('click', onRotate);
@@ -890,6 +913,7 @@ $('btnNew').addEventListener('click', () => {
     // обратно в меню без перезагрузки
     started = false;
     $('game').hidden = true;
+    $('names').hidden = true;
     $('setup').hidden = false;
   } else {
     location.href = location.origin + location.pathname;
