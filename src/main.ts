@@ -590,9 +590,15 @@ function startHosting(): void {
     },
     onAction: (seat: number, msg: ClientMsg) => {
       if (msg.t === 'hello') {
-        pendingNicks.set(seat, { nick: msg.nick, color: msg.color });
+        // сетевые данные не доверяем: ник режем, цвет — только #rrggbb,
+        // иначе модифицированный клиент мог бы подсунуть HTML в style-атрибут
+        const nick = String(msg.nick).slice(0, 16).trim() || `Игрок ${seat}`;
+        const color = /^#[0-9a-fA-F]{6}$/.test(String(msg.color))
+          ? String(msg.color)
+          : DEFAULT_COLORS[(seat - 1) % DEFAULT_COLORS.length];
+        pendingNicks.set(seat, { nick, color });
         if (started) {
-          state = setPlayerInfo(state, seat, msg.nick, msg.color);
+          state = setPlayerInfo(state, seat, nick, color);
           publish();
         }
         return;
