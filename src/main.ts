@@ -37,8 +37,9 @@ let rotated = false;
 let hover: { x: number; y: number } | null = null;
 let message = '';
 
-let myNick = '';
-let myColor = DEFAULT_COLORS[0];
+// ники и цвета из меню: в локальной игре — все игроки, у хозяина — только первый
+const playersSetup: { nick: string; color: string }[] = [];
+let joinNick = '';
 let joinColor = DEFAULT_COLORS[1];
 let selectedCard: CardId | null = null;
 
@@ -62,6 +63,10 @@ function myTurn(): boolean {
 
 function noRotateNow(): boolean {
   return state.pending.some((e) => e.card === 'block' && e.target === state.current);
+}
+
+function silencedNow(): boolean {
+  return state.pending.some((e) => e.card === 'silence' && e.target === state.current);
 }
 
 function diceSize(): { w: number; h: number } | null {
@@ -154,7 +159,8 @@ function draw(): void {
     ctx.stroke();
   }
 
-  // предпросмотр блока
+  // предпросмотр блока: допустимый — плотный со сплошной рамкой,
+  // недопустимый — бледный, пунктирная рамка (оба — цветом игрока)
   const p = myTurn() && state.dice ? previewPlacement() : null;
   if (p) {
     const legal = isLegal(p);
@@ -164,13 +170,8 @@ function draw(): void {
     ctx.fillRect(p.x * cell, p.y * cell, p.w * cell, p.h * cell);
     ctx.globalAlpha = 1;
     ctx.lineWidth = 2;
-    if (legal) {
-      ctx.strokeStyle = color;
-      ctx.setLineDash([]);
-    } else {
-      ctx.strokeStyle = '#d33';
-      ctx.setLineDash([6, 4]);
-    }
+    ctx.strokeStyle = color;
+    ctx.setLineDash(legal ? [] : [6, 4]);
     ctx.strokeRect(p.x * cell, p.y * cell, p.w * cell, p.h * cell);
     ctx.setLineDash([]);
   }
@@ -246,12 +247,12 @@ function cardButton(card: CardId, label: string, onClick: () => void): HTMLEleme
 }
 
 function updatePanels(): void {
-  // выбор 1 из 3 карт в начале хода
+  // выбор 1 из 3 карт (даётся один раз — в первый ход игрока)
   const offer = $('offer');
   offer.innerHTML = '';
   if (state.offer && myTurn() && !state.finished) {
     offer.hidden = false;
-    offer.append('Выберите карту:');
+    offer.append('Стартовый бонус — выберите карту:');
     for (const c of state.offer) {
       offer.appendChild(cardButton(c, 'Взять', () => onPick(c)));
     }
@@ -280,8 +281,9 @@ function updatePanels(): void {
   hand.innerHTML = '';
   const seat = mode === 'local' ? state.current : mySeat;
   const cards = state.hands[seat - 1] ?? [];
-  const canPlay = myTurn() && !state.offer && !state.dice && !state.diceChoice && !state.finished;
+  const base = myTurn() && !state.offer && !state.diceChoice && !state.finished && !silencedNow();
   for (const c of cards) {
+    const enabled = c === 'reroll' ? base && !!state.dice : base && !state.dice;
     const div = cardButton(c, 'Сыграть', () => {
       if (CARD_INFO[c].needsTarget) {
         selectedCard = c;
@@ -290,14 +292,14 @@ function updatePanels(): void {
         onPlay(c);
       }
     });
-    div.querySelector('button')!.disabled = !canPlay;
+    div.querySelector('button')!.disabled = !enabled;
     hand.appendChild(div);
   }
 
   // выбор цели для карты
   const targets = $('targets');
   targets.innerHTML = '';
-  if (selectedCard && canPlay) {
+  if (selectedCard && base && !state.dice) {
     targets.hidden = false;
     targets.append(`${CARD_INFO[selectedCard].name} — цель:`);
     for (let s = 1; s <= state.config.players; s++) {
@@ -324,6 +326,12 @@ function updatePanels(): void {
   } else {
     targets.hidden = true;
   }
+}
+
+function newGameLabel(): string {
+  if (mode === 'host' && started && state.finished) return 'Ещё раз (все остаются в комнате)';
+  if (mode === 'local' && started) return 'В меню';
+  return 'Новая игра';
 }
 
 function updateUI(): void {
@@ -386,6 +394,7 @@ function updateUI(): void {
     !myTurn() || state.dice !== null || state.offer !== null || state.diceChoice !== null;
   $<HTMLButtonElement>('btnRotate').disabled =
     !myTurn() || !state.dice || state.dice[0] === state.dice[1] || noRotateNow();
+  $('btnNew').textContent = newGameLabel();
   draw();
 }
 
@@ -516,8 +525,12 @@ function botStep(): void {
     if (!state.dice && !state.diceChoice) {
       const hand = state.hands[1];
       if (hand.includes('third')) doPlay('third');
+      else if (hand.includes('extra')) doPlay('extra');
+      else if (hand.includes('plus')) doPlay('plus');
       else if (hand.includes('double')) doPlay('double', 2);
       else if (hand.includes('block')) doPlay('block', 1);
+      else if (hand.includes('weaken')) doPlay('weaken', 1);
+      else if (hand.includes('silence')) doPlay('silence', 1);
       else if (hand.includes('thief') && state.hands[0].length > 0) doPlay('thief', 1);
       else doRoll();
       return;
@@ -526,7 +539,12 @@ function botStep(): void {
       doChoose(Math.floor(Math.random() * 3));
       return;
     }
+    // если ходов почти нет и есть переброс — попробуем ещё раз
     const moves = currentMoves(state);
+    if (moves.length > 0 && moves.length < 3 && state.hands[1].includes('reroll')) {
+      doPlay('reroll');
+      return;
+    }
     if (moves.length) doPlace(greedy(moves));
   });
 }
@@ -580,7 +598,7 @@ function startHosting(): void {
         $('lobbyStatus').textContent = `Ждём игроков: ${total + 1} из ${hostConfig.players}`;
         if (total === hostConfig.players - 1) {
           state = createGame(hostConfig);
-          state = setPlayerInfo(state, 1, myNick, myColor);
+          state = setPlayerInfo(state, 1, playersSetup[0].nick, playersSetup[0].color);
           for (const [s, info] of pendingNicks) {
             state = setPlayerInfo(state, s, info.nick, info.color);
           }
@@ -622,6 +640,18 @@ function startHosting(): void {
   });
 }
 
+// реванш: новая партия в той же комнате, игроки и ники сохраняются
+function rematch(): void {
+  const old = state;
+  state = createGame(hostConfig);
+  for (let s = 1; s <= old.config.players; s++) {
+    state = setPlayerInfo(state, s, old.players[s - 1].nick, old.players[s - 1].color);
+  }
+  message = 'Новая партия — поехали!';
+  setupBoard();
+  publish();
+}
+
 // ---------- онлайн: гость ----------
 function connectGuest(): void {
   guestLink = createGuest(roomCode!, {
@@ -631,15 +661,17 @@ function connectGuest(): void {
     onMsg: (msg: HostMsg) => {
       if (msg.t === 'welcome') {
         mySeat = msg.seat;
-        guestLink?.send({ t: 'hello', nick: myNick, color: joinColor });
+        guestLink?.send({ t: 'hello', nick: joinNick, color: joinColor });
         if (!started) $('info').textContent = `Вы на месте ${mySeat}. Ждём остальных игроков…`;
       } else if (msg.t === 'full') {
         roomFull = true;
         $('info').textContent = 'В комнате нет свободных мест';
       } else if (msg.t === 'state') {
+        const wasFinished = started && state.finished;
         state = msg.state;
         message = msg.message;
-        if (!started) setupBoard();
+        // первое подключение или реванш — пересобираем доску
+        if (!started || wasFinished) setupBoard();
         rotated = false;
         selectedCard = null;
         updateUI();
@@ -672,7 +704,7 @@ function scheduleReconnect(): void {
 }
 
 function joinAsGuest(): void {
-  myNick = $<HTMLInputElement>('joinNick').value.trim();
+  joinNick = $<HTMLInputElement>('joinNick').value.trim();
   $('join').hidden = true;
   mode = 'guest';
   const info = $('info');
@@ -686,7 +718,9 @@ function startLocal(): void {
   mode = 'local';
   botEnabled = $<HTMLInputElement>('inBot').checked && parseInt($<HTMLSelectElement>('inP').value) === 2;
   state = createGame(readConfig());
-  state = setPlayerInfo(state, 1, myNick, myColor);
+  for (let s = 1; s <= state.config.players; s++) {
+    state = setPlayerInfo(state, s, playersSetup[s - 1].nick, playersSetup[s - 1].color);
+  }
   if (botEnabled) state = setPlayerInfo(state, 2, 'Бот 🤖', DEFAULT_COLORS[1]);
   message = '';
   setupBoard();
@@ -724,28 +758,90 @@ function readConfig(): ConfigInput {
   };
 }
 
-// ---------- выбор цвета ----------
-function buildColors(containerId: string, initial: string, onPick: (c: string) => void): void {
-  const box = $(containerId);
-  for (const c of DEFAULT_COLORS) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.style.background = c;
-    b.title = c;
-    if (c === initial) b.classList.add('sel');
-    b.addEventListener('click', () => {
-      box.querySelectorAll('button').forEach((x) => x.classList.remove('sel'));
-      b.classList.add('sel');
-      onPick(c);
+// ---------- выбор цвета из всего спектра ----------
+// Горизонталь — оттенок, вертикаль — светлота (верх белый, низ чёрный)
+function buildColorPicker(container: HTMLElement, initial: string, onPick: (c: string) => void): void {
+  const wrap = document.createElement('div');
+  wrap.className = 'cpicker';
+  const cv = document.createElement('canvas');
+  cv.width = 140;
+  cv.height = 80;
+  const dot = document.createElement('span');
+  dot.className = 'cdot';
+  const preview = document.createElement('span');
+  preview.className = 'cpreview';
+  wrap.append(cv, dot, preview);
+  container.appendChild(wrap);
+
+  const c2 = cv.getContext('2d')!;
+  for (let x = 0; x < cv.width; x++) {
+    const hue = (x / cv.width) * 360;
+    const grad = c2.createLinearGradient(0, 0, 0, cv.height);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.5, `hsl(${hue}, 100%, 50%)`);
+    grad.addColorStop(1, '#000000');
+    c2.fillStyle = grad;
+    c2.fillRect(x, 0, 1, cv.height);
+  }
+
+  preview.style.background = initial;
+  dot.style.left = `${(DEFAULT_COLORS.indexOf(initial) + 0.5) * (cv.width / 4)}px`;
+  dot.style.top = '50%';
+
+  let dragging = false;
+  const pick = (e: PointerEvent): void => {
+    const r = cv.getBoundingClientRect();
+    const x = Math.min(Math.max(e.clientX - r.left, 0), r.width);
+    const y = Math.min(Math.max(e.clientY - r.top, 0), r.height);
+    const hue = Math.round((x / r.width) * 360);
+    const light = Math.round((1 - y / r.height) * 100);
+    const color = light >= 99 ? '#ffffff' : light <= 1 ? '#000000' : `hsl(${hue}, 100%, ${light}%)`;
+    dot.style.left = `${(x / r.width) * cv.width}px`;
+    dot.style.top = `${(y / r.height) * cv.height}px`;
+    preview.style.background = color;
+    onPick(color);
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    cv.setPointerCapture(e.pointerId);
+    pick(e);
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (dragging) pick(e);
+  });
+  cv.addEventListener('pointerup', () => {
+    dragging = false;
+  });
+}
+
+// строки «ник + цвет» по числу игроков
+function rebuildPlayerRows(): void {
+  const n = parseInt($<HTMLSelectElement>('inP').value);
+  const box = $('playerRows');
+  box.innerHTML = '';
+  playersSetup.length = 0;
+  for (let i = 0; i < n; i++) {
+    playersSetup.push({ nick: '', color: DEFAULT_COLORS[i] });
+    const row = document.createElement('div');
+    row.className = 'prow';
+    const inp = document.createElement('input');
+    inp.maxLength = 16;
+    inp.placeholder = `Игрок ${i + 1}`;
+    const idx = i;
+    inp.addEventListener('input', () => {
+      playersSetup[idx].nick = inp.value;
     });
-    box.appendChild(b);
+    row.appendChild(inp);
+    buildColorPicker(row, DEFAULT_COLORS[i], (c) => {
+      playersSetup[idx].color = c;
+    });
+    box.appendChild(row);
   }
 }
 
-buildColors('myColors', myColor, (c) => {
-  myColor = c;
-});
-buildColors('joinColors', joinColor, (c) => {
+rebuildPlayerRows();
+$<HTMLSelectElement>('inP').addEventListener('change', rebuildPlayerRows);
+buildColorPicker($('joinColorBox'), joinColor, (c) => {
   joinColor = c;
 });
 
@@ -782,19 +878,22 @@ window.addEventListener('keydown', (e) => {
   if (k === 'r' || k === 'к') onRotate();
 });
 
-$('btnStart').addEventListener('click', () => {
-  myNick = $<HTMLInputElement>('inNick').value.trim();
-  startLocal();
-});
-$('btnHost').addEventListener('click', () => {
-  myNick = $<HTMLInputElement>('inNick').value.trim();
-  startHosting();
-});
+$('btnStart').addEventListener('click', startLocal);
+$('btnHost').addEventListener('click', startHosting);
 $('btnJoin').addEventListener('click', joinAsGuest);
 $('btnRoll').addEventListener('click', onRoll);
 $('btnRotate').addEventListener('click', onRotate);
 $('btnNew').addEventListener('click', () => {
-  location.href = location.origin + location.pathname;
+  if (mode === 'host' && started && state.finished) {
+    rematch();
+  } else if (mode === 'local' && started) {
+    // обратно в меню без перезагрузки
+    started = false;
+    $('game').hidden = true;
+    $('setup').hidden = false;
+  } else {
+    location.href = location.origin + location.pathname;
+  }
 });
 $('btnCopy').addEventListener('click', () => {
   void navigator.clipboard.writeText($<HTMLInputElement>('linkField').value);

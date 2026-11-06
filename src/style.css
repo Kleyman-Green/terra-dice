@@ -15,6 +15,17 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .colors button { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; padding: 0; }
 .colors button.sel { border-color: #222; box-shadow: 0 0 0 2px #fff inset; }
 
+.cpicker { position: relative; display: inline-flex; align-items: center; gap: 8px; }
+.cpicker canvas { border: 1px solid #999; border-radius: 6px; cursor: crosshair; touch-action: none; }
+.cpicker .cdot {
+  position: absolute; width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid #fff; box-shadow: 0 0 3px #000; pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+.cpreview { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #555; }
+.prow { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.prow input { width: 130px; }
+
 #join { background: #fff; border: 1px solid #ccc; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
 
 #status { font-size: 18px; margin-bottom: 6px; }

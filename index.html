@@ -46,9 +46,8 @@
         </fieldset>
 
         <fieldset>
-          <legend>Вы</legend>
-          <label>Ник <input id="inNick" type="text" maxlength="16" placeholder="Игрок 1" /></label>
-          <div class="colors" id="myColors"></div>
+          <legend>Игроки</legend>
+          <div id="playerRows"></div>
         </fieldset>
 
         <fieldset class="actions">
@@ -60,12 +59,12 @@
       <div id="join" hidden>
         <p>Вас пригласили в игру! Представьтесь:</p>
         <label>Ник <input id="joinNick" type="text" maxlength="16" placeholder="Игрок" /></label>
-        <div class="colors" id="joinColors"></div>
+        <div id="joinColorBox"></div>
         <button id="btnJoin">Подключиться</button>
       </div>
 
       <div id="lobby" hidden>
-        <p>Отправьте эту ссылку друзьям:</p>
+        <p>Отправьте эту ссылку друзьям (работает через интернет):</p>
         <input id="linkField" readonly style="width: 100%; max-width: 520px" />
         <button id="btnCopy">Копировать</button>
         <p id="lobbyStatus"></p>

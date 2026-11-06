@@ -204,6 +204,83 @@ describe('карточки', () => {
     };
     expect(() => playCard(g, 'double', 2)).toThrow();
   });
+
+  it('выбор карт даётся каждому игроку только один раз', () => {
+    let g = createGame(ccfg, mulberry32(7));
+    expect(g.offer).not.toBeNull(); // первый ход игрока 1
+    g = pickOffer(g, g.offer![0]);
+    g = { ...g, dice: [2, 2] };
+    g = applyMove(g, { x: 0, y: 0, w: 2, h: 2 }, mulberry32(8));
+    expect(g.current).toBe(2);
+    expect(g.offer).not.toBeNull(); // первый ход игрока 2
+    g = pickOffer(g, g.offer![0]);
+    g = { ...g, dice: [2, 2] };
+    g = applyMove(g, { x: 4, y: 4, w: 2, h: 2 }, mulberry32(9));
+    expect(g.current).toBe(1);
+    expect(g.offer).toBeNull(); // второй ход игрока 1 — без выбора
+  });
+
+  it('переброс: новые кубики после броска', () => {
+    let g: GameState = {
+      ...createGame(ccfg),
+      offer: null,
+      hands: [['reroll'], []],
+      dice: [1, 1],
+    };
+    g = playCard(g, 'reroll', undefined, () => 0.99);
+    expect(g.dice).toEqual([6, 6]);
+    expect(g.hands[0]).toEqual([]);
+  });
+
+  it('плюс один: кубик +1', () => {
+    let g: GameState = {
+      ...createGame(ccfg),
+      offer: null,
+      hands: [['plus'], []],
+    };
+    g = playCard(g, 'plus');
+    g = rollDice(g, () => 0.4); // кубики 3 и 3, плюс бьёт по первому
+    expect(g.dice).toEqual([4, 3]);
+  });
+
+  it('обрезка: кубик соперника становится 1', () => {
+    let g: GameState = {
+      ...createGame(ccfg),
+      offer: null,
+      hands: [['weaken'], []],
+    };
+    g = playCard(g, 'weaken', 2);
+    g = { ...g, current: 2 };
+    g = rollDice(g, () => 0.99); // кубики 6 и 6, обрезка бьёт по второму
+    expect(g.dice).toEqual([6, 1]);
+  });
+
+  it('тишина: соперник не может играть карты', () => {
+    let g: GameState = {
+      ...createGame(ccfg),
+      offer: null,
+      hands: [
+        ['silence'],
+        ['double'],
+      ],
+    };
+    g = playCard(g, 'silence', 2);
+    g = { ...g, current: 2 };
+    expect(() => playCard(g, 'double', 1)).toThrow('Тишина');
+  });
+
+  it('двойной ход: игрок ходит ещё раз', () => {
+    let g: GameState = {
+      ...createGame(ccfg),
+      offer: null,
+      hands: [['extra'], []],
+    };
+    g = playCard(g, 'extra');
+    g = { ...g, dice: [2, 2] };
+    g = applyMove(g, { x: 0, y: 0, w: 2, h: 2 }, mulberry32(10));
+    expect(g.current).toBe(1); // ход не перешёл
+    expect(g.pending).toEqual([]); // эффект израсходован
+  });
 });
 
 describe('таймер хода', () => {

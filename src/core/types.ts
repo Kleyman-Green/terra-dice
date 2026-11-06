@@ -18,11 +18,20 @@ export type Placement = {
   h: number;
 };
 
-export type CardId = 'double' | 'thief' | 'third' | 'block';
+export type CardId =
+  | 'double'
+  | 'thief'
+  | 'third'
+  | 'block'
+  | 'reroll'
+  | 'extra'
+  | 'weaken'
+  | 'plus'
+  | 'silence';
 
 // Отложенный эффект, ждущий своего хука на ходу цели
 export type PendingEffect = {
-  card: 'double' | 'third' | 'block';
+  card: 'double' | 'third' | 'block' | 'extra' | 'weaken' | 'plus' | 'silence';
   target: number; // игрок 1..players
 };
 
@@ -38,7 +47,8 @@ export type GameState = {
   bonus: number[]; // индексы бонусных клеток
   players: PlayerInfo[];
   hands: CardId[][]; // hands[i] — карты игрока i+1
-  offer: CardId[] | null; // выбор 1 из 3 карт в начале хода
+  dealt: number[]; // кто уже получил свой стартовый выбор карт
+  offer: CardId[] | null; // выбор 1 из 3 карт (только в первый ход игрока)
   pending: PendingEffect[];
   diceChoice: [number, number, number] | null; // «третий куб»: ждём выбор 2 из 3
   current: number; // чей сейчас ход (1..players)

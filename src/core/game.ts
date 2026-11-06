@@ -12,7 +12,17 @@ export type Rng = () => number;
 
 export const DEFAULT_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f'];
 
-export const ALL_CARDS: CardId[] = ['double', 'thief', 'third', 'block'];
+export const ALL_CARDS: CardId[] = [
+  'double',
+  'thief',
+  'third',
+  'block',
+  'reroll',
+  'extra',
+  'weaken',
+  'plus',
+  'silence',
+];
 
 export const CARD_INFO: Record<CardId, { name: string; text: string; needsTarget: boolean }> = {
   double: {
@@ -33,6 +43,31 @@ export const CARD_INFO: Record<CardId, { name: string; text: string; needsTarget
   block: {
     name: 'Блок',
     text: 'Соперник на следующем ходу не сможет поворачивать прямоугольник',
+    needsTarget: true,
+  },
+  reroll: {
+    name: 'Переброс',
+    text: 'Перебрось оба кубика заново (играется после броска)',
+    needsTarget: false,
+  },
+  extra: {
+    name: 'Двойной ход',
+    text: 'После постановки блока ты ходишь ещё раз',
+    needsTarget: false,
+  },
+  weaken: {
+    name: 'Обрезка',
+    text: 'У соперника при следующем броске один кубик станет 1',
+    needsTarget: true,
+  },
+  plus: {
+    name: 'Плюс один',
+    text: 'При твоём следующем броске один кубик +1',
+    needsTarget: false,
+  },
+  silence: {
+    name: 'Тишина',
+    text: 'Соперник не сможет играть карты на следующем ходу',
     needsTarget: true,
   },
 };
@@ -188,6 +223,7 @@ export function createGame(
       color: DEFAULT_COLORS[i],
     })),
     hands: Array.from({ length: config.players }, () => []),
+    dealt: [],
     offer: null,
     pending: [],
     diceChoice: null,
@@ -200,11 +236,16 @@ export function createGame(
   return beginTurn(state, rng, now);
 }
 
-// Начало хода игрока state.current: выдача выбора карт и запуск таймера
+// Начало хода игрока state.current: стартовый выбор карт (один раз за игру) и таймер
 function beginTurn(state: GameState, rng: Rng, now: number): GameState {
-  const offer = state.config.cards ? drawOffer(rng) : null;
+  let offer: CardId[] | null = null;
+  let dealt = state.dealt;
+  if (state.config.cards && !dealt.includes(state.current)) {
+    offer = drawOffer(rng);
+    dealt = [...dealt, state.current];
+  }
   const deadline = state.config.turnSeconds > 0 ? now + state.config.turnSeconds * 1000 : null;
-  return { ...state, offer, deadline };
+  return { ...state, offer, dealt, deadline };
 }
 
 function drawOffer(rng: Rng): CardId[] {
@@ -241,16 +282,26 @@ export function rollDice(state: GameState, rng: Rng = Math.random): GameState {
   }
 
   const dice: [number, number] = [rollDie(rng), rollDie(rng)];
-  return applyDouble({ ...state, dice, pending: rest.concat(mine) }, rng);
+  return applyRollEffects({ ...state, dice, pending: rest.concat(mine) }, rng);
 }
 
-// Хук «удвоение»: один кубик цели ×2
-function applyDouble(state: GameState, rng: Rng): GameState {
-  const dbl = state.pending.find((e) => e.card === 'double' && e.target === state.current);
-  if (!dbl || !state.dice) return state;
-  const dice: [number, number] = [...state.dice];
-  dice[rng() < 0.5 ? 0 : 1] *= 2;
-  return { ...state, dice, pending: state.pending.filter((e) => e !== dbl) };
+// Хуки после броска: «плюс один» (+1), «удвоение» (×2), «обрезка» (=1)
+function applyRollEffects(state: GameState, rng: Rng): GameState {
+  if (!state.dice) return state;
+  let { dice, pending } = state;
+  const mine = pending.filter((e) => e.target === state.current);
+  const apply = (card: 'plus' | 'double' | 'weaken', f: (v: number) => number): void => {
+    const eff = mine.find((e) => e.card === card);
+    if (!eff) return;
+    const idx = rng() < 0.5 ? 0 : 1;
+    dice = [...dice];
+    dice[idx] = f(dice[idx]);
+    pending = pending.filter((e) => e !== eff);
+  };
+  apply('plus', (v) => v + 1);
+  apply('double', (v) => v * 2);
+  apply('weaken', () => 1);
+  return { ...state, dice, pending };
 }
 
 // Выбор двух кубиков из трёх: drop — индекс лишнего (0..2)
@@ -258,7 +309,7 @@ export function chooseDice(state: GameState, drop: number, rng: Rng = Math.rando
   if (!state.diceChoice) throw new Error('Сейчас нечего выбирать');
   if (drop < 0 || drop > 2) throw new Error('Неверный индекс кубика');
   const kept = state.diceChoice.filter((_, i) => i !== drop) as [number, number];
-  return applyDouble({ ...state, dice: kept, diceChoice: null }, rng);
+  return applyRollEffects({ ...state, dice: kept, diceChoice: null }, rng);
 }
 
 // ---------- размещение ----------
@@ -374,7 +425,12 @@ export function applyMove(
   }
 
   // эффекты, навешанные на завершившего ход игрока, сгорают
+  // (сюда входит и «двойной ход» — он расходуется этой постановкой)
   const pending = state.pending.filter((e) => e.target !== state.current);
+
+  // «двойной ход»: игрок остаётся текущим и ходит ещё раз
+  const extra = state.pending.some((e) => e.card === 'extra' && e.target === state.current);
+  const next = extra ? state.current : nextPlayer(state);
 
   return beginTurn(
     {
@@ -385,7 +441,7 @@ export function applyMove(
       pending,
       dice: null,
       idleTurns: 0,
-      current: nextPlayer(state),
+      current: next,
     },
     rng,
     now,
@@ -429,7 +485,7 @@ export function pickOffer(state: GameState, card: CardId): GameState {
   return { ...state, hands, offer: null };
 }
 
-// Разыграть карту из руки. Можно только в свой ход, до броска кубиков.
+// Разыграть карту из руки. Большинство карт — до броска, «переброс» — после.
 export function playCard(
   state: GameState,
   card: CardId,
@@ -438,14 +494,24 @@ export function playCard(
 ): GameState {
   if (state.finished) throw new Error('Игра окончена');
   if (state.offer) throw new Error('Сначала выберите карту из предложенных');
-  if (state.dice || state.diceChoice) throw new Error('Карты играются до броска кубиков');
 
   const me = state.current;
+  if (state.pending.some((e) => e.card === 'silence' && e.target === me)) {
+    throw new Error('Тишина: в этом ходу карты играть нельзя');
+  }
+  if (card === 'reroll') {
+    if (!state.dice || state.diceChoice) {
+      throw new Error('Переброс играется после броска кубиков');
+    }
+  } else if (state.dice || state.diceChoice) {
+    throw new Error('Эта карта играется до броска кубиков');
+  }
+
   const hand = state.hands[me - 1];
   const idx = hand.indexOf(card);
   if (idx < 0) throw new Error('Такой карты нет в руке');
 
-  if (card !== 'third') {
+  if (CARD_INFO[card].needsTarget) {
     if (target === undefined || target < 1 || target > state.config.players) {
       throw new Error('Нужно выбрать цель');
     }
@@ -465,7 +531,11 @@ export function playCard(
     return { ...state, hands };
   }
 
-  const effect: PendingEffect = { card, target: card === 'third' ? me : target! };
+  if (card === 'reroll') {
+    return { ...state, hands, dice: [rollDie(rng), rollDie(rng)] };
+  }
+
+  const effect: PendingEffect = { card, target: CARD_INFO[card].needsTarget ? target! : me };
   return { ...state, hands, pending: [...state.pending, effect] };
 }
 
