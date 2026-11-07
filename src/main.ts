@@ -22,6 +22,11 @@ import { clearDice, throwDice } from './dice3d';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+// версия сборки — видна в углу, чтобы можно было сверить,
+// что у всех игроков загружена одинаковая (свежая) версия
+const APP_VERSION = 'v1.4 (07.11)';
+$('version').textContent = APP_VERSION;
+
 const canvas = $<HTMLCanvasElement>('board');
 const ctx = canvas.getContext('2d')!;
 
@@ -622,7 +627,7 @@ function startHosting(): void {
 function netErrorText(err: string): string {
   if (err === 'peer-unavailable') return 'Комната не найдена — проверьте ссылку';
   if (/could not connect to peer/i.test(err)) {
-    return 'Не удалось установить соединение — у кого-то из игроков строгий NAT (часто это мобильный интернет). Попробуйте ещё раз, попросите друга перейти на домашний Wi-Fi или настройте свой TURN-сервер в меню (пункт «Друг не может подключиться?»)';
+    return 'Не удалось установить соединение. Чаще всего помогает: обоим игрокам обновить страницу с очисткой кэша (Ctrl+Shift+R), чтобы у обоих была одинаковая свежая версия (сверьте номер версии в правом верхнем углу), и попробовать снова. Если не помогло — попросите друга перейти с мобильного интернета на Wi-Fi.';
   }
   if (/relay|tracker|join/i.test(err)) {
     return 'Серверы подключения недоступны — попробуйте позже';

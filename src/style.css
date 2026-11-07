@@ -185,3 +185,14 @@ canvas#board { background: #fdfdff; border: 2px solid #333; border-radius: 6px; 
 #helpBox h2 { margin-top: 0; }
 #helpBox p { margin: 10px 0; }
 #btnHelpClose { font-size: 16px; padding: 8px 18px; margin-top: 6px; }
+
+/* ---------- версия сборки ---------- */
+#version {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  font-size: 12px;
+  color: rgba(205, 214, 255, 0.55);
+  z-index: 90;
+  user-select: none;
+}
